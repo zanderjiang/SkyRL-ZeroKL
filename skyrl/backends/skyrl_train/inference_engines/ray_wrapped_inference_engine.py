@@ -338,7 +338,12 @@ def create_ray_wrapped_inference_engines(
 
     if inference_engine_enable_sleep:
         # NOTE(shu): set to 1 for LoRA
-        sleep_level = 1 if enable_lora else sleep_level
+        # SkyRL-ZeroKL: force level 1 (offload weights to CPU + restore on wake) so the
+        # bridge-loaded GPTModel weights survive sleep/wake. Level 2 FREES the cumem weight region
+        # and our non-vLLM-loaded GPTModel weights are NOT refilled into the live buffers on wake
+        # (engine weights -> norm 0.0 -> uniform/gibberish generation). See ZEROKL_SKYRL_INTEGRATION.md.
+        import os as _os
+        sleep_level = 1 if (enable_lora or _os.environ.get("SKYRL_ZERO_KL") == "1") else sleep_level
         sleep_refs = [engine.inference_engine_actor.sleep.remote(level=sleep_level) for engine in engines]
         ray.get(sleep_refs)
 

@@ -54,6 +54,15 @@ def build_engine_runtime_env(
     env_vars: Dict[str, str] = {}
     if use_expandable_segments:
         env_vars["PYTORCH_CUDA_ALLOC_CONF"] = _alloc_conf_with_expandable_segments()
+    # SkyRL-ZeroKL: the engine actors set their own runtime_env, so forward the zero-KL switch
+    # here explicitly (don't rely on job-level env_vars merging) -- the GPTModel registration +
+    # native weight sync only run when the engine actor sees SKYRL_ZERO_KL=1.
+    if os.environ.get("SKYRL_ZERO_KL"):
+        env_vars["SKYRL_ZERO_KL"] = os.environ["SKYRL_ZERO_KL"]
+        env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+        for _zk in ("SKYRL_ZEROKL_ENGINE_LOAD_WEIGHTS", "SKYRL_ZEROKL_BISECT"):
+            if os.environ.get(_zk):
+                env_vars[_zk] = os.environ[_zk]
     if extra_env_vars:
         env_vars.update(extra_env_vars)
     if not env_vars:

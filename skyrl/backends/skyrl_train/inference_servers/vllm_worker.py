@@ -100,9 +100,83 @@ class WorkerWrap(LayerwiseReloadWorkerMixin):
         assert isinstance(request, bytes), f"Expected bytes, got {type(request).__name__}"
         request = pickle.loads(request)
 
+        import os as _os_probe
+        print(
+            f"[ZEROKL-PROBE] WorkerWrap.load_weights CALLED; SKYRL_ZERO_KL={_os_probe.environ.get('SKYRL_ZERO_KL')!r} "
+            f"bracketed={getattr(self, '_skyrl_weight_update_active', False)} "
+            f"model_cls={type(getattr(self.model_runner, 'model', None)).__name__}",
+            flush=True,
+        )
+
         weight_list = []
         for name, tensor in self._weight_receiver.receive_weights(request):
             weight_list.append((name, tensor))
+
+        # SkyRL-ZeroKL: the vLLM model IS Megatron's GPTModel (GPTModelVLLMWrapper). Copy the
+        # native (no-HF) params straight into wrapper.gpt by name instead of vLLM's HF loader.
+        # load_weights is called ONCE PER CHUNK (per param), so accumulate diagnostics on self and
+        # print() them (Ray forwards stdout; SkyRL suppresses module-logger INFO).
+        import os as _os
+        if _os.environ.get("SKYRL_ZERO_KL") == "1":
+            model = self.model_runner.model
+            target = model.gpt if hasattr(model, "gpt") else model
+            # IMPORTANT: rebuild the dst map EVERY call (do NOT cache). vLLM's colocate sleep/wake
+            # (cumem) re-allocates the weight storage on each wake; a cached dict would copy into
+            # STALE/freed tensors while generation reads the live (zero) buffers -> gibberish.
+            params = dict(target.named_parameters())
+            bufs = dict(target.named_buffers())
+            copied = 0
+            materialized = 0
+            miss = []
+
+            def _set_on_module(root, dotted, value, as_param, requires_grad):
+                # navigate to the owning submodule and replace the param/buffer object so a META
+                # placeholder (from cumem sleep freeing storage) becomes a real GPU tensor.
+                *path, attr = dotted.split(".")
+                mod = root
+                for p in path:
+                    mod = getattr(mod, p)
+                if as_param:
+                    mod._parameters[attr] = torch.nn.Parameter(value, requires_grad=requires_grad)
+                else:
+                    mod._buffers[attr] = value
+
+            with torch.no_grad(), set_current_vllm_config(self.vllm_config):
+                for name, tensor in weight_list:
+                    is_param = name in params
+                    dest = params.get(name)
+                    if dest is None:
+                        dest = bufs.get(name)
+                    if dest is None:
+                        if len(miss) < 3:
+                            miss.append(name)
+                        continue
+                    tgt_dtype = dest.dtype if dest.dtype.is_floating_point else tensor.dtype
+                    src = tensor.to(self.device, tgt_dtype)
+                    self._zk_recv_ck = getattr(self, "_zk_recv_ck", 0.0) + float(src.float().double().abs().sum())
+                    if dest.is_meta or dest.device.type == "meta" or tuple(dest.shape) != tuple(src.shape):
+                        # cumem freed the storage -> param is META; replace the object entirely.
+                        _set_on_module(target, name, src, is_param, getattr(dest, "requires_grad", False))
+                        materialized += 1
+                    else:
+                        dest.copy_(src)
+                    copied += 1
+            self._zerokl_copied = getattr(self, "_zerokl_copied", 0) + copied
+            if copied:
+                # checksum of the LIVE engine gpt params (after this sync) -- compare to SENDER cksum
+                _eng = 0.0
+                for _n, _p in target.named_parameters():
+                    if _p.device.type != "meta":
+                        _eng += float(_p.float().double().abs().sum())
+                print(f"[ZEROKL-CKSUM] RECEIVER recv-abs-sum={self._zk_recv_ck:.6f} engine-gpt-abs-sum={_eng:.6f}", flush=True)
+                _p = next((p for n, p in target.named_parameters() if "weight" in n), None)
+                _wn = float(_p.float().norm()) if (_p is not None and _p.device.type != "meta") else -1.0
+                print(f"[ZEROKL-SYNC] copied {copied} (materialized {materialized}, cum {self._zerokl_copied}) "
+                      f"miss={miss}; live first_w_norm={_wn:.3f}", flush=True)
+            torch.accelerator.synchronize()  # consume IPC tensors before sender drops them
+            for weight in weight_list:
+                del weight
+            return
 
         weight_update_bracketed = getattr(self, "_skyrl_weight_update_active", False)
         with torch.device(self.device), set_current_vllm_config(self.vllm_config):

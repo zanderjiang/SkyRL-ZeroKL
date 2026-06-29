@@ -1,3 +1,5 @@
+import os
+from contextlib import nullcontext
 from dataclasses import asdict
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional
@@ -36,6 +38,21 @@ from skyrl.backends.skyrl_train.workers.worker_utils import (
     compute_minibatch_rollout_logprob_diff_metrics,
 )
 from skyrl.train.config import TrainerConfig
+
+
+def _zerokl_scoring_ctx():
+    """SkyRL-ZeroKL: run the Megatron forward/backward under the unified (vops) RMSNorm so the
+    trainer's logprobs match the vLLM-GPTModel rollout. Applied to BOTH the no-grad old-logprob
+    recompute AND the grad training forward, so old==new (is_ratio==1 at the first inner step,
+    SkyRL's per-minibatch-recompute guarantee) AND both match the rollout (rollout_train diff small).
+    No-op when SKYRL_ZERO_KL != 1.
+    Bisect toggle: SKYRL_ZEROKL_SCORING_FORWARD=0 disables the vops-norm wrap (to test whether it
+    is what breaks the trainer's Megatron forward -> near-uniform logits / entropy ~8)."""
+    if os.environ.get("SKYRL_ZERO_KL") == "1" and os.environ.get("SKYRL_ZEROKL_SCORING_FORWARD", "1") == "1":
+        from skyrl.backends.skyrl_train.zerokl.megatron_patches import scoring_mode
+
+        return scoring_mode()
+    return nullcontext()
 
 
 def _build_packed_targets(
@@ -222,10 +239,14 @@ class MegatronModelWrapper:
                 )
                 packed_seq_params = None
 
+            # SkyRL-ZeroKL: pass attention_mask=None (pure causal flash) to match the engine's
+            # causal-flash path. new_sequences is unpadded + decoder-causal; an explicit mask sends
+            # TE down a different flash variant -> diffuse ~0.01 logprob drift vs the engine.
+            _zk_mask = None if (os.environ.get("SKYRL_ZERO_KL") == "1" and packed_seq_params is None) else new_attention_mask
             outputs = model(
                 new_sequences,
                 new_position_ids,
-                new_attention_mask,
+                _zk_mask,
                 packed_seq_params=packed_seq_params,
             )
 
@@ -242,15 +263,16 @@ class MegatronModelWrapper:
 
         batch_generator = make_batch_generator(micro_batches, vpp_size=len(self.actor_module))
 
-        output = forward_backward_func(
-            forward_step_func=forward_step,
-            data_iterator=batch_generator,
-            model=self.actor_module,
-            num_microbatches=len(micro_batches),
-            seq_length=seq_len,
-            micro_batch_size=micro_batch_size,
-            forward_only=True,
-        )
+        with _zerokl_scoring_ctx():
+            output = forward_backward_func(
+                forward_step_func=forward_step,
+                data_iterator=batch_generator,
+                model=self.actor_module,
+                num_microbatches=len(micro_batches),
+                seq_length=seq_len,
+                micro_batch_size=micro_batch_size,
+                forward_only=True,
+            )
 
         if mpu.is_pipeline_last_stage(ignore_virtual=True):
             log_probs = [o["log_probs"] for o in output]
@@ -574,10 +596,14 @@ class MegatronModelWrapper:
                 )
                 packed_seq_params = None
 
+            # SkyRL-ZeroKL: pass attention_mask=None (pure causal flash) to match the engine's
+            # causal-flash path. new_sequences is unpadded + decoder-causal; an explicit mask sends
+            # TE down a different flash variant -> diffuse ~0.01 logprob drift vs the engine.
+            _zk_mask = None if (os.environ.get("SKYRL_ZERO_KL") == "1" and packed_seq_params is None) else new_attention_mask
             outputs = model(
                 new_sequences,
                 new_position_ids,
-                new_attention_mask,
+                _zk_mask,
                 packed_seq_params=packed_seq_params,
             )
 
@@ -598,15 +624,43 @@ class MegatronModelWrapper:
         # batch should be a list of micro-batches
         batch_generator = make_batch_generator(micro_batches, vpp_size=len(self.actor_module))
 
-        metrics_list = forward_backward_func(
-            forward_step_func=forward_step,
-            data_iterator=batch_generator,
-            model=self.actor_module,
-            num_microbatches=len(micro_batches),
-            seq_length=seq_len,
-            micro_batch_size=micro_batch_size,
-            forward_only=forward_only,
-        )
+        # SkyRL-ZeroKL bisect: checksum the weights the TRAINER FORWARD actually reads, in the SAME
+        # formula as native_weight_sync.extract_native_weights (the SENDER) and gptmodel_vllm
+        # (the ENGINE runtime probe). Three-way compare localizes the multi-process 0.0104:
+        #   trainer-fwd == SENDER  but  ENGINE != SENDER   -> sync/cumem delivers wrong weights
+        #   trainer-fwd == ENGINE  == SENDER               -> weights fine; diff is token alignment
+        if os.environ.get("SKYRL_ZEROKL_BISECT") == "1" and not getattr(self, "_zk_fwd_cksum_done", False):
+            with torch.no_grad():
+                _s, _n, _seen = 0.0, 0, set()
+                for _m in self.actor_module:
+                    _inner = _m
+                    for _ in range(4):
+                        _inner = _inner.module if hasattr(_inner, "module") else _inner
+                    for _nm, _p in _inner.named_parameters():
+                        if _nm in _seen or _nm.startswith("mtp."):
+                            continue
+                        _seen.add(_nm)
+                        _t = _p.detach()
+                        if hasattr(_t, "full_tensor"):
+                            try:
+                                _t = _t.full_tensor()
+                            except Exception:
+                                pass
+                        _s += float(_t.to(torch.bfloat16).float().double().abs().sum()); _n += 1
+            print(f"[ZEROKL-BISECT] TRAINER forward-weight non-MTP cksum={_s:.6f} (n={_n})  "
+                  f"[compare to SENDER + ENGINE]", flush=True)
+            self._zk_fwd_cksum_done = True
+
+        with _zerokl_scoring_ctx():
+            metrics_list = forward_backward_func(
+                forward_step_func=forward_step,
+                data_iterator=batch_generator,
+                model=self.actor_module,
+                num_microbatches=len(micro_batches),
+                seq_length=seq_len,
+                micro_batch_size=micro_batch_size,
+                forward_only=forward_only,
+            )
 
         # broadcast metrics to all pp ranks
         if not mpu.is_pipeline_last_stage(ignore_virtual=True):

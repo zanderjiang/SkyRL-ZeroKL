@@ -1312,6 +1312,18 @@ class RayPPOTrainer:
             logprobs_diff_min = logprobs_diff.min().item()
             logprobs_diff_mean = logprobs_diff.mean().item()
             logprobs_diff_std = logprobs_diff.std().item()
+            import os as _os_zk
+            if _os_zk.environ.get("SKYRL_ZERO_KL") == "1":
+                # localize the outliers: where do rollout vs trainer logprobs diverge?
+                _roll = training_input["rollout_logprobs"][training_input["loss_mask"] > 0]
+                _act = action_log_probs[training_input["loss_mask"] > 0]
+                _d = (_roll - _act).abs()
+                _frac_big = (_d > 0.05).float().mean().item()
+                _topv, _topi = _d.topk(min(8, _d.numel()))
+                print(f"[ZEROKL-DIFF] n={_d.numel()} mean={_d.mean():.5f} frac>0.05={_frac_big:.3%} "
+                      f"| top8 diffs={[round(x,3) for x in _topv.tolist()]} "
+                      f"rollout@top={[round(x,3) for x in _roll[_topi].tolist()]} "
+                      f"trainer@top={[round(x,3) for x in _act[_topi].tolist()]}", flush=True)
             self.all_metrics.update(
                 {
                     "policy/rollout_train_logprobs_abs_diff_max": logprobs_diff_max,

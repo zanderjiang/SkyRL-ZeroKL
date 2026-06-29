@@ -731,6 +731,19 @@ def prepare_runtime_environment(cfg: SkyRLTrainConfig) -> dict[str, str]:
 
     env_vars["_SKYRL_USE_NEW_INFERENCE"] = "1" if _SKYRL_USE_NEW_INFERENCE else "0"
 
+    # SkyRL-ZeroKL: forward the zero-KL switch (set in the launcher env) to ALL ray actors --
+    # megatron policy workers (batch-invariant patches + scoring_mode forward) AND vLLM engines
+    # (GPTModel registration + native weight sync). Without this, the hooks never fire and the run
+    # silently falls back to the regular HF path. See ZEROKL_SKYRL_INTEGRATION.md.
+    if os.environ.get("SKYRL_ZERO_KL"):
+        logger.info(f"Exporting `SKYRL_ZERO_KL`={os.environ['SKYRL_ZERO_KL']} to ray runtime env (zero-KL mode)")
+        env_vars["SKYRL_ZERO_KL"] = os.environ["SKYRL_ZERO_KL"]
+        # in-process vLLM so the GPTModel string-registration in the engine actor reaches model build
+        env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+        for _zk in ("SKYRL_ZEROKL_ENGINE_LOAD_WEIGHTS", "SKYRL_ZEROKL_SCORING_FORWARD", "SKYRL_ZEROKL_TRAINER_PATCHES", "SKYRL_ZEROKL_BISECT"):
+            if os.environ.get(_zk):
+                env_vars[_zk] = os.environ[_zk]
+
     if SKYRL_LD_LIBRARY_PATH_EXPORT:
         # export `LD_LIBRARY_PATH` to ray runtime env.
         # For some reason the `LD_LIBRARY_PATH` is not exported to the worker with .env file.

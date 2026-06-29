@@ -89,6 +89,40 @@ def setup_envvars_for_vllm(kwargs, bundle_indices):
         os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
         logger.info(f"creating LLM with bundle_indices={bundle_indices}")
 
+    # SkyRL-ZeroKL: enable vLLM batch-invariant numerics so the rollout engine matches the
+    # Megatron trainer bitwise. Gated by env so it is fully reversible / opt-in. Must run
+    # before the vLLM engine is constructed (this function does exactly that).
+    if os.environ.get("SKYRL_ZERO_KL") == "1":
+        from skyrl.backends.skyrl_train.zerokl import (
+            apply_vllm_zerokl_env, zerokl_engine_arg_overrides)
+        from skyrl.backends.skyrl_train.zerokl.gptmodel_vllm import (
+            register_gptmodel_to_vllm, VLLM_MODEL_NAME)
+
+        apply_vllm_zerokl_env()
+        # CRITICAL for zero-KL: force prefix caching + chunked prefill OFF (and enforce_eager ON).
+        # Prefix caching reuses KV computed in a DIFFERENT batch context than the trainer's clean
+        # single-sequence forward, and chunked prefill splits a prompt across forward steps -- both
+        # break batch-invariance, so the rollout (decode) logprobs drift ~0.01 from a clean recompute
+        # even though VLLM_BATCH_INVARIANT=1 makes the kernels deterministic. (SkyRL config defaults
+        # both to True; without this override the rollout_train_logprobs_abs_diff floors at ~0.0104
+        # instead of the ~1e-5 cross-runtime floor.) These cannot be set via env -> mutate kwargs.
+        for _k, _v in zerokl_engine_arg_overrides().items():
+            if kwargs.get(_k) != _v:
+                logger.info("[zerokl] forcing engine arg %s=%s (was %s)", _k, _v, kwargs.get(_k))
+            kwargs[_k] = _v
+        # Run Megatron's GPTModel inside vLLM (unified model) so the rollout == trainer. String
+        # registration survives mp/async worker subprocesses (each lazily imports the wrapper).
+        register_gptmodel_to_vllm()  # cross-process string form
+        hf_overrides = dict(kwargs.get("hf_overrides") or {})
+        hf_overrides["architectures"] = [VLLM_MODEL_NAME]
+        kwargs["hf_overrides"] = hf_overrides
+        # NOTE: for the registration to reach spawned mp/async workers, run the engine in-process
+        # (VLLM_ENABLE_V1_MULTIPROCESSING=0) OR expose the wrapper as a vLLM general plugin. The
+        # in-process path is validated first; the plugin path is the production form. See
+        # SkyRL-ZeroKL/ZEROKL_SKYRL_INTEGRATION.md.
+        os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
+        logger.info("[zerokl] vLLM will run GPTModel (arch=%s) via hf_overrides", VLLM_MODEL_NAME)
+
 
 class BaseVLLMInferenceEngine(InferenceEngineInterface):
     """Base class containing shared logic between sync and async VLLM engines."""
@@ -321,7 +355,10 @@ class VLLMInferenceEngine(BaseVLLMInferenceEngine):
             unfinished_request_ids = self._get_unfinished_request_ids(output_processor)
             await asyncio.to_thread(engine.abort_request, unfinished_request_ids)
 
-        level = 1 if self._is_lora else kwargs.get("level", 2)
+        # SkyRL-ZeroKL: force level 1 (CPU offload + restore) so the bridge-loaded GPTModel
+        # weights survive sleep/wake (level 2 frees the cumem region -> engine weights zeroed).
+        import os as _os
+        level = 1 if (self._is_lora or _os.environ.get("SKYRL_ZERO_KL") == "1") else kwargs.get("level", 2)
         await asyncio.to_thread(self.llm.sleep, level=level)
 
     async def init_weight_update_communicator(self, init_info: "WeightSyncInitInfo"):
@@ -567,7 +604,10 @@ class AsyncVLLMInferenceEngine(BaseVLLMInferenceEngine):
         # TODO(team): remove once vllm fixes this
         # otherwise waking it up will output gibberish: https://github.com/vllm-project/vllm/issues/17103
         await self.reset_prefix_cache()
-        level = 1 if self._is_lora else kwargs.get("level", 2)
+        # SkyRL-ZeroKL: force level 1 (CPU offload + restore) so the bridge-loaded GPTModel
+        # weights survive sleep/wake (level 2 frees the cumem region -> engine weights zeroed).
+        import os as _os
+        level = 1 if (self._is_lora or _os.environ.get("SKYRL_ZERO_KL") == "1") else kwargs.get("level", 2)
         await self.llm.sleep(level=level)
 
     async def init_weight_update_communicator(self, init_info: "WeightSyncInitInfo"):

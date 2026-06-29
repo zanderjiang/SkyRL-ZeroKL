@@ -217,6 +217,21 @@ class MegatronWeightExtractor(WeightExtractor):
         dtype_names = []
         shapes = []
         dtype_name = str(dtype).split(".")[-1]
+
+        # SkyRL-ZeroKL: native metadata (no HF) so it matches extract_weights' native chunks AND
+        # the engine GPTModel's own param names 1:1. Must be consistent with extract_weights below.
+        if os.environ.get("SKYRL_ZERO_KL") == "1":
+            from skyrl.backends.skyrl_train.zerokl.native_weight_sync import extract_native_weights
+
+            for name, tensor in extract_native_weights(self.actor_module, dtype=dtype):
+                names.append(name)
+                dtype_names.append(dtype_name)
+                shapes.append(list(tensor.shape))
+                del tensor
+            self._weight_metadata_cache = {"names": names, "dtype_names": dtype_names, "shapes": shapes}
+            print(f"[ZEROKL-SENDER] get_weight_metadata NATIVE: {len(names)} names (e.g. {names[:2]})", flush=True)
+            return self._weight_metadata_cache
+
         # Collect parameter metadata in the same order
         # as provided by `.extract_weights`.
         if not self.enable_bucketing:
@@ -267,6 +282,20 @@ class MegatronWeightExtractor(WeightExtractor):
         """
         self._ensure_buckets_initialized()
         device = torch.cuda.current_device()
+
+        # SkyRL-ZeroKL: the rollout runs the SAME GPTModel, so sync NATIVE params (no HF
+        # conversion). The receiver copies them straight into GPTModelVLLMWrapper.gpt by name.
+        # (TP=1: named_parameters are full. TP>1 needs a TP-gather here -- see ZEROKL_SKYRL_INTEGRATION.md.)
+        if os.environ.get("SKYRL_ZERO_KL") == "1":
+            from skyrl.backends.skyrl_train.zerokl.native_weight_sync import extract_native_weights
+
+            _n = 0
+            for name, tensor in extract_native_weights(self.actor_module, dtype=dtype):
+                tensor = tensor.to(device=device, dtype=dtype, non_blocking=True)
+                _n += 1
+                yield WeightChunk(names=[name], dtypes=[str(dtype)], shapes=[list(tensor.shape)], tensors=[tensor])
+            print(f"[ZEROKL-SENDER] extract_weights NATIVE yielded {_n} chunks", flush=True)
+            return
 
         if not self.enable_bucketing:
             # No bucketing: yield one chunk per parameter
@@ -406,6 +435,23 @@ class MegatronWorker:
         provider.attention_backend = "flash" if flash_attn else "fused"
         provider.variable_seq_lengths = True
         provider.masked_softmax_fusion = True
+        # SkyRL-ZeroKL: the engine (GPTModelVLLMWrapper) builds with apply_rope_fusion=False so the
+        # fp32-RoPE zero-KL patch applies. The trainer MUST match -- otherwise it uses the fused
+        # (bf16) RoPE kernel which BYPASSES the patch, so trainer RoPE != engine RoPE and the
+        # rollout_train logprob diff inflates. Force it off (and log) under zero-KL.
+        if os.environ.get("SKYRL_ZERO_KL") == "1":
+            provider.apply_rope_fusion = False
+            # Match the bitwise standalone build exactly: it leaves these at defaults
+            # (variable_seq_lengths=False -> BSHD flash, not varlen/THD; masked_softmax_fusion off;
+            # gradient_accumulation_fusion off). The varlen/THD attention path diverges from the
+            # engine's per-sequence vLLM paged attention -> inflates rollout_train. Requires
+            # remove_microbatch_padding=false (padded BSHD microbatches).
+            provider.variable_seq_lengths = False
+            provider.masked_softmax_fusion = False
+            provider.gradient_accumulation_fusion = False
+            print(f"[ZEROKL-TRAINER] forced apply_rope_fusion=False variable_seq_lengths=False "
+                  f"masked_softmax_fusion=False gradient_accumulation_fusion=False; "
+                  f"attention_backend={provider.attention_backend}", flush=True)
         # Apply explicit MoE config fields to the provider.
         # These replace the previously hardcoded values and can be further
         # overridden by transformer_config_kwargs if needed.
@@ -796,6 +842,26 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             lora_type=self.cfg.policy.megatron_config.lora_config.lora_type,
             bf16=self.cfg.bf16,
         )
+
+        # SkyRL-ZeroKL: install the Megatron-side bitwise-parity patches (fp32 RoPE,
+        # vLLM C++ RMSNorm, batch-invariant GEMM/log_softmax) right after the model is
+        # built. Gated by env so it is opt-in and reversible. See zerokl/README.md.
+        if os.environ.get("SKYRL_ZERO_KL") == "1" and os.environ.get("SKYRL_ZEROKL_TRAINER_PATCHES", "1") == "1":
+            from skyrl.backends.skyrl_train.zerokl import apply_megatron_zerokl_patches
+
+            apply_megatron_zerokl_patches()
+            print("[ZEROKL-TRAINER] applied megatron zerokl patches (fp32 rope, vops norm, batch-invariant)", flush=True)
+            # UNIFY THE ATTENTION KERNEL (TorchTitan approach): swap the trainer's TE attention for
+            # flash_attn_varlen_func -- the SAME flash kernel the engine (vLLM) uses (bitwise-
+            # identical to vLLM's vendored flash; supports paged via with_kvcache + non-paged via
+            # varlen). TE-attention vs vLLM-flash is the diffuse ~0.01 rollout_train residual.
+            if os.environ.get("SKYRL_ZEROKL_FLASH_ATTN", "1") == "1":
+                from skyrl.backends.skyrl_train.zerokl.megatron_flash_attn import swap_trainer_core_attention_flash
+
+                swap_trainer_core_attention_flash(self.actor_module)
+                print("[ZEROKL-TRAINER] swapped TE core_attention -> flash_attn_varlen (== engine vLLM flash)", flush=True)
+        elif os.environ.get("SKYRL_ZERO_KL") == "1":
+            print("[ZEROKL-TRAINER] SKIPPED megatron zerokl patches (SKYRL_ZEROKL_TRAINER_PATCHES=0) -- vanilla forward", flush=True)
 
         if self._local_rank == 0 and not os.path.exists(
             model_path

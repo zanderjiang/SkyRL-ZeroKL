@@ -41,6 +41,17 @@ def compute_minibatch_rollout_logprob_diff_metrics(
         return {}
     abs_diff = (action_log_probs - rollout_logprobs).abs()
     masked_abs_diff = abs_diff if loss_mask is None else abs_diff * loss_mask
+    import os as _os_zk
+    if _os_zk.environ.get("SKYRL_ZERO_KL") == "1":
+        _m = loss_mask.bool() if loss_mask is not None else torch.ones_like(abs_diff, dtype=torch.bool)
+        _ad = abs_diff[_m]; _al = action_log_probs[_m]; _rl = rollout_logprobs[_m]
+        if _ad.numel() > 0:
+            _fb = (_ad > 0.05).float().mean().item()
+            _tv, _ti = _ad.topk(min(6, _ad.numel()))
+            print(f"[ZEROKL-DIFF] n={_ad.numel()} mean={_ad.mean():.5f} frac>0.05={_fb:.2%} | "
+                  f"top diffs={[round(x,3) for x in _tv.tolist()]} "
+                  f"train@={[round(x,3) for x in _al[_ti].tolist()]} "
+                  f"rollout@={[round(x,3) for x in _rl[_ti].tolist()]}", flush=True)
     return {
         MINIBATCH_ROLLOUT_LOGPROB_DIFF_MEAN_KEY: masked_mean(abs_diff, loss_mask).item(),
         MINIBATCH_ROLLOUT_LOGPROB_DIFF_SQ_MEAN_KEY: masked_mean(abs_diff.square(), loss_mask).item(),
