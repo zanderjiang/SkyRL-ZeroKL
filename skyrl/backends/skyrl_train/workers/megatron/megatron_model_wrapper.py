@@ -683,6 +683,11 @@ class MegatronModelWrapper:
         #   trainer-fwd == SENDER  but  ENGINE != SENDER   -> sync/cumem delivers wrong weights
         #   trainer-fwd == ENGINE  == SENDER               -> weights fine; diff is token alignment
         if os.environ.get("SKYRL_ZEROKL_BISECT") == "1" and not getattr(self, "_zk_fwd_cksum_done", False):
+            _wf = None
+            try:
+                _wf = open("/mnt/local_storage/zerokl_trn_w.txt", "w")
+            except Exception:
+                _wf = None
             with torch.no_grad():
                 _s, _n, _seen = 0.0, 0, set()
                 for _m in self.actor_module:
@@ -699,7 +704,21 @@ class MegatronModelWrapper:
                                 _t = _t.full_tensor()
                             except Exception:
                                 pass
+                        # per-tensor: fp32 checksum of the ACTUAL param (un-rounded) + its native dtype,
+                        # so a bf16-vs-fp32 forward-precision mismatch vs the engine (bf16) is visible.
+                        if _wf is not None:
+                            try:
+                                _wf.write(f"{_nm}\t{float(_t.float().double().abs().sum()):.8f}\t"
+                                          f"{tuple(_t.shape)}\t{_t.dtype}\n")
+                            except Exception:
+                                pass
                         _s += float(_t.to(torch.bfloat16).float().double().abs().sum()); _n += 1
+            if _wf is not None:
+                try:
+                    _wf.close()
+                    print("[ZEROKL-WDUMP] trainer weights -> zerokl_trn_w.txt", flush=True)
+                except Exception:
+                    pass
             print(f"[ZEROKL-BISECT] TRAINER forward-weight non-MTP cksum={_s:.6f} (n={_n})  "
                   f"[compare to SENDER + ENGINE]", flush=True)
             try:

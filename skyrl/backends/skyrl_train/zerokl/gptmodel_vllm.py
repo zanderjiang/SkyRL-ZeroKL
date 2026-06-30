@@ -254,6 +254,19 @@ class GPTModelVLLMWrapper(nn.Module):
         # attention is the swapped vLLM paged layer (ignores attention_mask, uses vLLM metadata).
         tokens = input_ids.unsqueeze(0)
         pos = positions.unsqueeze(0)
+        # Per-tensor weight dump (first forward) to compare ENGINE runtime weights (post native-sync)
+        # to the TRAINER's forward weights offline -> find which params the sync diverges on.
+        if os.environ.get("SKYRL_ZEROKL_BISECT") == "1" and not getattr(self, "_zk_wdump_done", False):
+            self._zk_wdump_done = True
+            try:
+                with open("/mnt/local_storage/zerokl_eng_w.txt", "w") as _wf:
+                    for _nm, _p in self.gpt.named_parameters():
+                        if _p.device.type == "meta":
+                            continue
+                        _wf.write(f"{_nm}\t{float(_p.float().double().abs().sum()):.8f}\t{tuple(_p.shape)}\t{_p.dtype}\n")
+                print("[ZEROKL-WDUMP] engine weights -> zerokl_eng_w.txt", flush=True)
+            except Exception as _e:
+                print(f"[ZEROKL-WDUMP] engine failed: {_e}", flush=True)
         self._rope.set_positions(positions.reshape(-1))  # absolute positions for RoPE
         out = self.gpt(input_ids=tokens, position_ids=pos, attention_mask=None)
         # GPTModel(post_process) returns logits [b, s, vocab]; we expose them via forward and
