@@ -293,6 +293,37 @@ class MegatronModelWrapper:
             # Assume all micros have same num_actions
             num_actions = micro_batches[0]["num_actions"]
             log_probs = log_probs[:, -num_actions:]
+            # Per-tensor TRAINER forward-weight dump (once), in the SCORING forward which is proven to
+            # be hit (FWD_PROBE dumps here). The BISECT block at line ~685 is in forward_backward_mini_batch
+            # which isn't hit before the metric. Writes the SAME formula as the engine (bf16->fp32->sum)
+            # to compare to BISECT-ENGINE 89866863.40, plus per-tensor to /mnt/local_storage/zerokl_trn_w.txt.
+            if os.environ.get("SKYRL_ZEROKL_BISECT") == "1" and not getattr(self, "_zk_wdump_done", False):
+                self._zk_wdump_done = True
+                try:
+                    _gsum, _seen2 = 0.0, set()
+                    with open("/mnt/local_storage/zerokl_trn_w.txt", "w") as _wf2:
+                        for _mm in self.actor_module:
+                            _inn = _mm
+                            for _ in range(4):
+                                _inn = _inn.module if hasattr(_inn, "module") else _inn
+                            for _nm2, _p2 in _inn.named_parameters():
+                                if _nm2 in _seen2 or _nm2.startswith("mtp."):
+                                    continue
+                                _seen2.add(_nm2)
+                                _t2 = _p2.detach()
+                                if hasattr(_t2, "full_tensor"):
+                                    try:
+                                        _t2 = _t2.full_tensor()
+                                    except Exception:
+                                        pass
+                                _wf2.write(f"{_nm2}\t{float(_t2.float().double().abs().sum()):.8f}\t"
+                                           f"{tuple(_t2.shape)}\t{_t2.dtype}\n")
+                                _gsum += float(_t2.to(torch.bfloat16).float().double().abs().sum())
+                    with open("/mnt/local_storage/zerokl_probe.log", "a") as _pf2:
+                        _pf2.write(f"BISECT-TRAINER cksum={_gsum:.6f} n={len(_seen2)}\n")
+                    print("[ZEROKL-WDUMP] trainer scoring-fwd weights -> zerokl_trn_w.txt", flush=True)
+                except Exception as _e2:
+                    print(f"[ZEROKL-WDUMP] trainer dump failed: {_e2}", flush=True)
             # SkyRL-ZeroKL probe (B): is the forward MACHINERY the residual? Run the standalone's
             # EXACT forward (bare GPTModel, unpadded single sequence, scoring_mode, attention_mask=None,
             # plain log_softmax) on micro_batch 0 and compare to the forward_backward_func result.
