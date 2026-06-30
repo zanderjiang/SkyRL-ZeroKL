@@ -29,8 +29,11 @@ DATA_DIR="/mnt/local_storage/data"
 TRAIN_FILE="$DATA_DIR/dapo-math-17k-cleaned.parquet"
 TEST_FILE="$DATA_DIR/aime-2024-cleaned.parquet"
 NUM_NODES=1
-NUM_GPUS_PER_NODE=4
-NUM_INFERENCE_ENGINES=4
+# 8 GPUs = DP8 (8 engines + 8 TP1 trainer replicas). The trainer MUST stay TP1 to match the engine's
+# TP1 bitwise (TP>1 changes the all-reduce order -> not bitwise). DP8 ~2x the 4-GPU throughput; host
+# RAM for the 8x CPU-offloaded optimizer (~670GB) fits with headroom (watchdog guards the headnode).
+NUM_GPUS_PER_NODE=8
+NUM_INFERENCE_ENGINES=8
 INFERENCE_ENGINE_TENSOR_PARALLEL_SIZE=1
 LOGGER="wandb"
 
