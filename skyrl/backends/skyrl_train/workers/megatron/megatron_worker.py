@@ -893,8 +893,21 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 swap_trainer_core_attention_flash(self.actor_module)
                 print("[ZEROKL-TRAINER] swapped TE core_attention -> flash_attn_varlen (== engine vLLM flash)", flush=True)
         elif os.environ.get("SKYRL_ZERO_KL") == "1":
-            _why = "LOCAL_SPEC (no-TE)" if os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1" else "TRAINER_PATCHES=0"
-            print(f"[ZEROKL-TRAINER] SKIPPED megatron zerokl TE patches ({_why}) -- vanilla local-spec forward", flush=True)
+            # Nightly LOCAL-spec (no-TE) bitwise path: skip the TE patches, but DO swap the trainer's
+            # core_attention to the SAME torch varlen_attn kernel the engine uses (num_splits=1, causal
+            # via window=(-1,0)). torch SDPA (local-spec default) is a different kernel and leaves huge
+            # per-token rollout-vs-train logprob outliers; the varlen swap makes the trainer forward
+            # bitwise-identical to the rollout -> minibatch_rollout_logprobs_abs_diff -> 0.
+            if (os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1"
+                    and os.environ.get("SKYRL_ZEROKL_VARLEN_ATTN", "1") == "1"):
+                from skyrl.backends.skyrl_train.zerokl.megatron_varlen_attn import (
+                    swap_trainer_core_attention_varlen,
+                )
+
+                swap_trainer_core_attention_varlen(self.actor_module)
+            else:
+                _why = "LOCAL_SPEC (no-TE)" if os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1" else "TRAINER_PATCHES=0"
+                print(f"[ZEROKL-TRAINER] SKIPPED megatron zerokl TE patches ({_why}) -- vanilla local-spec forward", flush=True)
 
         if self._local_rank == 0 and not os.path.exists(
             model_path
