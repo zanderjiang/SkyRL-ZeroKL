@@ -137,6 +137,7 @@ def setup_envvars_for_vllm(kwargs, bundle_indices):
         # default flash backend, whose split-K heuristic makes long-context decode != prefill).
         if os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1":
             from skyrl.backends.skyrl_train.zerokl import varlen_backend  # noqa: F401
+            from skyrl.backends.skyrl_train.zerokl.vllm_patches import patch_vllm_logprobs_batch_invariant
 
             if varlen_backend.register_varlen_custom_backend():
                 kwargs["attention_backend"] = "CUSTOM"
@@ -145,6 +146,11 @@ def setup_envvars_for_vllm(kwargs, bundle_indices):
             else:
                 logger.warning("[zerokl] torch.nn.attention.varlen unavailable; "
                                "CUSTOM backend NOT selected (zero-KL will not be bitwise)")
+            # The forward is bitwise, but vLLM's v2 sampler computes the ROLLOUT logprob with a fused
+            # Triton kernel that bypasses aten log_softmax -> diverges from the trainer's log_softmax on
+            # a few tokens. Route the generator through aten log_softmax (== trainer) for bitwise
+            # rollout==train. In-process engine (VLLM_ENABLE_V1_MULTIPROCESSING=0) so this reaches the sampler.
+            patch_vllm_logprobs_batch_invariant()
         # NOTE: for the registration to reach spawned mp/async workers, run the engine in-process
         # (VLLM_ENABLE_V1_MULTIPROCESSING=0) OR expose the wrapper as a vLLM general plugin. The
         # in-process path is validated first; the plugin path is the production form. See

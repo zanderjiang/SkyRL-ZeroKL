@@ -100,6 +100,51 @@ def zerokl_engine_arg_overrides() -> dict:
     }
 
 
+def patch_vllm_logprobs_batch_invariant() -> bool:
+    """Replace vLLM's v2 sampler fused-Triton logprob kernel with plain aten ``log_softmax``.
+
+    THE missing piece for bitwise rollout==train. The forward is already bitwise (matched attention +
+    batch-invariant GEMM/RMSNorm/log_softmax), but the ROLLOUT logprob returned from generation is
+    computed by vLLM's fused Triton kernel ``compute_token_logprobs`` -> ``_topk_log_softmax_kernel``,
+    which inlines ``log(softmax(logits))`` and NEVER calls a PyTorch/aten op -- so it bypasses the
+    batch-invariant ``aten::_log_softmax`` and diverges from the trainer's log_softmax on a few tokens
+    (most match -> the metric's min==0; a few don't -> max~0.3). The trainer computes logprobs with
+    aten log_softmax; routing the generator through the SAME aten op makes them bitwise-identical.
+
+    Mirrors TorchTitan ``experiments/rl/batch_invariance.force_logprobs_fn_for_batch_invariance``.
+    Must run in the (in-process, VLLM_ENABLE_V1_MULTIPROCESSING=0) engine process, under
+    VLLM_BATCH_INVARIANT=1 so the aten ``log_softmax`` is the batch-invariant kernel. Idempotent.
+    """
+    try:
+        import torch
+        import vllm.v1.worker.gpu.sample.logprob as _lp
+    except Exception as e:  # pragma: no cover
+        logger.warning("[zerokl] cannot patch vLLM logprob kernel: %s", e)
+        return False
+    if getattr(_lp, "_zerokl_logprob_patched", False):
+        return True
+
+    def _batch_invariant_compute_token_logprobs(logits, token_ids):
+        # logits [N, V], token_ids [N, K] -> [N, K]. Replicate the trainer's EXACT logprob math
+        # (distributed/megatron/model_utils.py _compute_distributed_log_softmax, TP=1 so the all-reduces
+        # are no-ops): manual log_softmax = (x - amax(x)) - log(sum(exp(x - amax(x)))), in float32, then
+        # gather. NOT torch.log_softmax -- that is a different kernel and would not be bitwise-equal to
+        # the trainer's manual formulation. Same input logits (bitwise forward) + same ops -> bitwise.
+        token_ids = token_ids.to(torch.int64)
+        x = logits.to(torch.float32)
+        x = x - torch.amax(x, dim=-1, keepdim=True)
+        lse = x.exp().sum(-1, keepdim=True).float().log()
+        logprobs = x - lse
+        return logprobs.gather(-1, token_ids)
+
+    _lp.compute_token_logprobs = _batch_invariant_compute_token_logprobs
+    _lp._zerokl_logprob_patched = True
+    logger.info("[zerokl] patched vLLM compute_token_logprobs -> aten log_softmax (== trainer)")
+    print("[ZEROKL-ENGINE] patched vLLM compute_token_logprobs -> aten log_softmax (== trainer) "
+          "for bitwise rollout logprobs", flush=True)
+    return True
+
+
 def zerokl_sampling_constraints() -> dict:
     """Sampling-side constraints for the MVP zero-KL target.
 
