@@ -148,6 +148,43 @@ megatron = [
     "nvidia-modelopt; sys_platform == 'linux'",
 ]
 
+# ZeroKL nightly stack: SkyRL orchestration layer + the proven nightly torch/vLLM/triton binaries
+# (resolved from local reconstructed wheels via [tool.uv.sources] below -- they are GC'd from public
+# indexes; rebuild with examples/zerokl/nightly/repackage_wheels.py). NO transformer-engine /
+# flash-attn / mamba-ssm / causal-conv1d: the bitwise zero-KL path uses torch.nn.attention.varlen.
+zerokl = [
+    "loguru",
+    "tqdm",
+    "ninja",
+    "tensorboard",
+    "func_timeout",
+    "hydra-core==1.3.2",
+    "accelerate",
+    "torchdata",
+    "omegaconf",
+    "ray==2.51.1",
+    "peft==0.18.1",
+    "hf_transfer",
+    "wandb",
+    "datasets>=4.0.0",
+    "tensordict",
+    "jaxtyping",
+    "skyrl-gym",
+    "polars",
+    "s3fs",
+    "fastapi",
+    "uvicorn",
+    "pybind11",
+    "setuptools",
+    "torch==2.14.0.dev20260620; sys_platform == 'linux'",
+    "triton==3.7.1; sys_platform == 'linux'",
+    "vllm==1.0.0.dev20260620; sys_platform == 'linux'",
+    "megatron-core; sys_platform == 'linux' and python_version >= '3.12'",
+    "megatron-bridge; sys_platform == 'linux' and python_version >= '3.12'",
+    "nvidia-modelopt; sys_platform == 'linux'",
+    "flashinfer-python==0.6.12; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
 flashrl = [
     "skyrl[skyrl-train]",
     # NOTE: Custom vLLM wheel must be installed separately.
@@ -208,6 +245,7 @@ conflicts = [
         { extra = "megatron" },
         { extra = "fsdp" },
         { extra = "flashrl" },
+        { extra = "zerokl" },
     ],
     [
         { extra = "megatron" },
@@ -215,6 +253,7 @@ conflicts = [
         { extra = "tpu" },
         { extra = "flashrl" },
         { extra = "miniswe" },
+        { extra = "zerokl" },
     ]
 ]
 # disable build isolation for megatron related dependencies
@@ -284,6 +323,13 @@ name = "vllm-cu129"
 url = "https://wheels.vllm.ai/0.23.0/cu129"
 explicit = true
 
+# ZeroKL nightly stack: torch 2.14 cu130 pulls nvidia-*-cu13 transitive deps. Kept as a safety net
+# (explicit=true -> never auto-consulted; the local wheels + PyPI cover everything in practice).
+[[tool.uv.index]]
+name = "pytorch-nightly-cu130"
+url = "https://download.pytorch.org/whl/nightly/cu130"
+explicit = true
+
 [tool.uv.sources]
 skyrl-gym = { path = "./skyrl-gym", editable = true }
 # Match torch's CUDA variant (cu128).
@@ -291,7 +337,13 @@ flashinfer-jit-cache = { index = "flashinfer-cu128", marker = "sys_platform == '
 # vllm 0.23.0's PyPI wheel needs CUDA 13 (libcudart.so.13); the cu129 wheel
 # links libcudart.so.12, which torch+cu128 supplies.
 vllm = [
+    # ZeroKL: local reconstructed nightly wheel (GC'd from public indexes), zerokl extra only.
+    { path = "/mnt/local_storage/zerokl-wheels/vllm-1.0.0.dev20260620+cu130-cp38-abi3-manylinux_2_24_x86_64.whl", extra = "zerokl" },
     { index = "vllm-cu129", marker = "sys_platform == 'linux'" },
+]
+# ZeroKL: local reconstructed triton nightly wheel (matches torch 2.14's pinned 3.7.1+git5d6048aa).
+triton = [
+    { path = "/mnt/local_storage/zerokl-wheels/triton-3.7.1+git5d6048aa-cp312-cp312-manylinux_2_27_x86_64.whl", extra = "zerokl" },
 ]
 # torch-2.11 wheels for these three aren't published upstream; built locally
 # on erictang000 forks (cu128 / cxx11abiTRUE / py3.12). flash-attn has its
@@ -304,6 +356,8 @@ mamba-ssm = { url = "https://github.com/erictang000/mamba/releases/download/v2.3
 # CUDA torch on Linux, CPU torch on macOS (must match skyrl-train).
 # Pinned to cu128: flashrl extra needs torch 2.7, only on cu128.
 torch = [
+    # ZeroKL: local reconstructed torch 2.14 nightly wheel (GC'd from public indexes), zerokl extra only.
+    { path = "/mnt/local_storage/zerokl-wheels/torch-2.14.0.dev20260620+cu130-cp312-cp312-manylinux_2_28_x86_64.whl", extra = "zerokl" },
     { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
 ]
