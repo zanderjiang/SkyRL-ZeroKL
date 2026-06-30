@@ -455,6 +455,17 @@ class MegatronWorker:
             print(f"[ZEROKL-TRAINER] forced apply_rope_fusion=False variable_seq_lengths=False "
                   f"masked_softmax_fusion=False gradient_accumulation_fusion=False; "
                   f"attention_backend={provider.attention_backend}", flush=True)
+        # SkyRL-ZeroKL nightly (no-TE) stack: megatron-bridge's default dense layer spec is
+        # hard-wired to TransformerEngine, which is intentionally absent here. Force Megatron's
+        # LOCAL spec (plain torch SDPA / RMSNorm / F.linear) so the trainer GPTModel is the same
+        # batch-invariant local-spec model the engine serves -- the basis for bitwise zero-KL.
+        # local_layer_spec(config) -> get_gpt_layer_local_spec(normalization=config.normalization,
+        # qk_layernorm=config.qk_layernorm, ...), so RMSNorm / no-qk-norm follow the HF config.
+        if os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1":
+            from megatron.bridge.models.gpt_provider import local_layer_spec
+
+            provider.transformer_layer_spec = local_layer_spec
+            print("[ZEROKL-TRAINER] forced Megatron LOCAL layer spec (no TransformerEngine)", flush=True)
         # Apply explicit MoE config fields to the provider.
         # These replace the previously hardcoded values and can be further
         # overridden by transformer_config_kwargs if needed.
