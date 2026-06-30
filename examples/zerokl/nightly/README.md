@@ -54,3 +54,17 @@ reward -> GRPO/DAPO advantage -> trainer GPTModel forward (new_logp, grad) -> du
 SGD/Adam -> native weight sync (copy trainer params -> engine `gpt` params, identical local names).
 `rollout_train_abs_diff` is bitwise 0 (decode==engine-prefill) and is_ratio==1 at the first inner
 step. TIS OFF (genuinely unnecessary now).
+
+## DAPO loop result (measured, dapo_zerokl_nightly.py, MiMo-7B, 8 steps)
+```
+step  reward  rollout_train[mean,max]   is_ratio[mean,max]      loss
+0   1.208 [ 0.00e+00, 0.00e+00] [ 1.057, 166.6]    0.3650
+4  33.583 [ 0.00e+00, 0.00e+00] [ 0.897, 129.1]    0.1564
+7  47.042 [ 0.00e+00, 0.00e+00] [ 0.923,  12.4]    0.0683
+```
+- rollout_train == 0 BITWISE every step => true zero-KL maintained through training.
+- reward learned 1.2 -> 47 (toy reward maximized); loss fell. The loop trains.
+- is_ratio mean ~0.7-1.06 with outliers: the GRADIENT forward (trainer Megatron SDPA) vs the
+  engine (vLLM varlen) cross-kernel drift. The zero-KL metric is unaffected (decode vs engine).
+  REFINEMENT to make is_ratio~1 (fully on-policy gradient): swap the trainer's core_attention to
+  flash_attn_varlen (causal) so it matches the engine's kernel (cf. working-stack megatron_flash_attn.py).

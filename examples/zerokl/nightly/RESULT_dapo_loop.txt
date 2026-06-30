@@ -1,0 +1,10 @@
+step  reward  rollout_train[mean,max]   is_ratio[mean,max]      loss
+   0   1.208 [ 0.00e+00, 0.00e+00] [ 1.05695,166.63513]    0.3650
+   1   3.125 [ 0.00e+00, 0.00e+00] [ 0.69898,74.31582]    0.2850
+   2   3.958 [ 0.00e+00, 0.00e+00] [ 0.94175,310.85349]    0.2737
+   3   8.792 [ 0.00e+00, 0.00e+00] [ 0.66803,90.58784]    0.2165
+   4  33.583 [ 0.00e+00, 0.00e+00] [ 0.89728,129.08139]    0.1564
+   5  43.708 [ 0.00e+00, 0.00e+00] [ 0.86100,10.59663]    0.0470
+   6  44.583 [ 0.00e+00, 0.00e+00] [ 0.86463, 5.51685]    0.0143
+   7  47.042 [ 0.00e+00, 0.00e+00] [ 0.92277,12.41100]    0.0683
+==> nightly DAPO zero-KL: rollout_train (behavior vs engine prefill rescore) is BITWISE 0 because engine decode==prefill (varlen num_splits=1 + local-spec batch-invariant). is_ratio carries only trainer-vs-engine cross-kernel drift.

@@ -215,3 +215,25 @@ def register_mimo_to_vllm():
             d = mimo_hf_config_dict()
             return d, PretrainedConfig.from_dict(d)
     return VLLM_MODEL_NAME, CONFIG_FORMAT
+
+
+def find_inprocess_gpt(llm):
+    """Reach MegatronMiMoVLLMWrapper.gpt inside an in-process vLLM LLM for native weight sync."""
+    seen = set()
+    def walk(o, d=0):
+        if id(o) in seen or d > 8:
+            return None
+        seen.add(id(o))
+        if hasattr(o, "gpt") and type(o).__name__ == "MegatronMiMoVLLMWrapper":
+            return o.gpt
+        for a in ("llm_engine", "engine_core", "model_executor", "driver_worker",
+                  "model_runner", "model", "worker", "engine"):
+            if hasattr(o, a):
+                try:
+                    r = walk(getattr(o, a), d + 1)
+                except Exception:
+                    r = None
+                if r is not None:
+                    return r
+        return None
+    return walk(llm)

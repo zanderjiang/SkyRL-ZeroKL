@@ -76,9 +76,13 @@ def main():
     native_sync()  # trainer == engine at start
 
     def trainer_logp(full_ids, n_prompt):
+        L = len(full_ids)
         inp = torch.tensor([full_ids], device="cuda")
-        pos = torch.arange(len(full_ids), device="cuda").unsqueeze(0)
-        logits = trainer(input_ids=inp, position_ids=pos, attention_mask=None)[0].float()[:, :VOCAB]
+        pos = torch.arange(L, device="cuda").unsqueeze(0)
+        # CAUSAL mask required: local-spec DotProductAttention does NOT auto-apply causal masking
+        # with attention_mask=None (it attends bidirectionally). Megatron convention: True == masked.
+        am = torch.tril(torch.ones(L, L, device="cuda", dtype=torch.bool)).logical_not().view(1, 1, L, L)
+        logits = trainer(input_ids=inp, position_ids=pos, attention_mask=am)[0].float()[:, :VOCAB]
         lp = torch.log_softmax(logits, dim=-1)
         resp = torch.tensor(full_ids[n_prompt:], device="cuda")
         idx = torch.arange(n_prompt - 1, len(full_ids) - 1, device="cuda")
