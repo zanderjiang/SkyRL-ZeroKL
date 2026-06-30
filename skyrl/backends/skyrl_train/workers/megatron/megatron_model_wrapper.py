@@ -702,6 +702,11 @@ class MegatronModelWrapper:
                         _s += float(_t.to(torch.bfloat16).float().double().abs().sum()); _n += 1
             print(f"[ZEROKL-BISECT] TRAINER forward-weight non-MTP cksum={_s:.6f} (n={_n})  "
                   f"[compare to SENDER + ENGINE]", flush=True)
+            try:
+                with open("/mnt/local_storage/zerokl_probe.log", "a") as _pf:
+                    _pf.write(f"BISECT-TRAINER cksum={_s:.6f} n={_n}\n")
+            except Exception:
+                pass
             self._zk_fwd_cksum_done = True
 
         with _zerokl_scoring_ctx():

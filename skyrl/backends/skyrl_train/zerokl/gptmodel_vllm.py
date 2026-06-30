@@ -276,6 +276,11 @@ class GPTModelVLLMWrapper(nn.Module):
                     _s += float(_p.float().double().abs().sum()); _n += 1
             print(f"[ZEROKL-BISECT] ENGINE runtime non-MTP cksum={_s:.6f} (n={_n}) "
                   f"fwd#{self._fwd_count}  [compare to SENDER checksum]", flush=True)
+            try:
+                with open("/mnt/local_storage/zerokl_probe.log", "a") as _pf:
+                    _pf.write(f"BISECT-ENGINE cksum={_s:.6f} n={_n} fwd#{self._fwd_count}\n")
+            except Exception:
+                pass
         if self._fwd_count in (1, 30, 100, 300):
             with torch.no_grad():
                 _wn = float(next((p for n, p in self.gpt.named_parameters() if "weight" in n)).float().norm())

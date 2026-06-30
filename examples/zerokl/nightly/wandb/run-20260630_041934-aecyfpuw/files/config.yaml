@@ -1,0 +1,124 @@
+_wandb:
+    value:
+        cli_version: 0.28.0
+        e:
+            hrjk11rk7bgle5ybhsgehhigrtjeo0q8:
+                args:
+                    - --steps
+                    - "25"
+                    - --lr
+                    - "5e-3"
+                    - --wandb
+                    - "1"
+                    - --wandb_project
+                    - zerokl_mimo_nightly
+                    - --wandb_run
+                    - dapo_zerokl_mimo_nightly
+                codePath: examples/zerokl/nightly/dapo_zerokl_nightly.py
+                codePathLocal: dapo_zerokl_nightly.py
+                cpu_count: 96
+                cpu_count_logical: 192
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "30396777496576"
+                        used: "492137185280"
+                email: zander.jiang@gmail.com
+                executable: /mnt/local_storage/zerokl-nightly-venv/bin/python
+                git:
+                    commit: 96aa930534fc88f56de0585be0d1502072de40da
+                    remote: https://github.com/zanderjiang/SkyRL.git/
+                gpu: NVIDIA H100 80GB HBM3
+                gpu_count: 8
+                gpu_nvidia:
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-4dcda54d-45d6-3acb-9d1c-80ffcb96a55a
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-e7599ada-3cbb-522d-cef8-95e37e05cfb6
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-3af1085e-1fe5-fa45-a04e-67699efe0b3c
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-4a9be64e-dc85-f2b0-8c6e-3262aa3a2857
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-4872f34d-a737-3a83-79cf-7bb3117b4d9d
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-7f58e976-1e62-aa9f-3a87-ddf341e6add0
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-660a7527-8348-707f-2333-65fbfdc612c9
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-2b2a314a-6fb5-ae14-c84b-ab13384dcd16
+                host: k-46145df80000
+                memory:
+                    total: "2147443855360"
+                os: Linux-6.12.90-120.164.amzn2023.x86_64-x86_64-with-glibc2.35
+                program: /home/ray/default/SkyRL-ZeroKL/examples/zerokl/nightly/dapo_zerokl_nightly.py
+                python: CPython 3.12.12
+                root: /home/ray/default/SkyRL-ZeroKL/examples/zerokl/nightly
+                startedAt: "2026-06-30T04:19:34.187405Z"
+                writerId: hrjk11rk7bgle5ybhsgehhigrtjeo0q8
+        m: []
+        python_version: 3.12.12
+        t:
+            "1":
+                - 1
+            "2":
+                - 1
+                - 11
+                - 49
+                - 95
+            "3":
+                - 13
+                - 16
+                - 61
+            "4": 3.12.12
+            "5": 0.28.0
+            "12": 0.28.0
+            "13": linux-x86_64
+clip_c:
+    value: 10
+eps_high:
+    value: 0.28
+eps_low:
+    value: 0.2
+gpu_mem:
+    value: 0.55
+group:
+    value: 6
+lr:
+    value: 0.005
+max_tokens:
+    value: 48
+prompts_per_step:
+    value: 4
+steps:
+    value: 25
+wandb:
+    value: 1
+wandb_project:
+    value: zerokl_mimo_nightly
+wandb_run:
+    value: dapo_zerokl_mimo_nightly

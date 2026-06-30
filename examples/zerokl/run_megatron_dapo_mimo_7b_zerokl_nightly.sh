@@ -92,6 +92,7 @@ export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=1800
 # via [ZEROKL-EXTRACT] (from_parallel vs plain log_softmax) and [ZEROKL-FWDPROBE] (bare unpadded
 # GPTModel vs fbf result). Both print from the trainer worker (whose stdout IS forwarded).
 export SKYRL_ZEROKL_FWD_PROBE=1
+export SKYRL_ZEROKL_BISECT=1  # dump engine vs trainer weight checksums to compare (sync bitwise?)
 DISTRIBUTED_EXECUTOR_BACKEND="mp"
 
 uv run --isolated --extra zerokl -m examples.train.algorithms.dapo.main_dapo \

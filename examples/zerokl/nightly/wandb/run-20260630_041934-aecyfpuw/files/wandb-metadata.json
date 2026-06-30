@@ -1,0 +1,101 @@
+{
+  "os": "Linux-6.12.90-120.164.amzn2023.x86_64-x86_64-with-glibc2.35",
+  "python": "CPython 3.12.12",
+  "startedAt": "2026-06-30T04:19:34.187405Z",
+  "args": [
+    "--steps",
+    "25",
+    "--lr",
+    "5e-3",
+    "--wandb",
+    "1",
+    "--wandb_project",
+    "zerokl_mimo_nightly",
+    "--wandb_run",
+    "dapo_zerokl_mimo_nightly"
+  ],
+  "program": "/home/ray/default/SkyRL-ZeroKL/examples/zerokl/nightly/dapo_zerokl_nightly.py",
+  "codePath": "examples/zerokl/nightly/dapo_zerokl_nightly.py",
+  "codePathLocal": "dapo_zerokl_nightly.py",
+  "git": {
+    "remote": "https://github.com/zanderjiang/SkyRL.git/",
+    "commit": "96aa930534fc88f56de0585be0d1502072de40da"
+  },
+  "email": "zander.jiang@gmail.com",
+  "root": "/home/ray/default/SkyRL-ZeroKL/examples/zerokl/nightly",
+  "host": "k-46145df80000",
+  "executable": "/mnt/local_storage/zerokl-nightly-venv/bin/python",
+  "cpu_count": 96,
+  "cpu_count_logical": 192,
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "gpu_count": 8,
+  "disk": {
+    "/": {
+      "total": "30396777496576",
+      "used": "492137185280"
+    }
+  },
+  "memory": {
+    "total": "2147443855360"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-4dcda54d-45d6-3acb-9d1c-80ffcb96a55a"
+    },
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-e7599ada-3cbb-522d-cef8-95e37e05cfb6"
+    },
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-3af1085e-1fe5-fa45-a04e-67699efe0b3c"
+    },
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-4a9be64e-dc85-f2b0-8c6e-3262aa3a2857"
+    },
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-4872f34d-a737-3a83-79cf-7bb3117b4d9d"
+    },
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-7f58e976-1e62-aa9f-3a87-ddf341e6add0"
+    },
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-660a7527-8348-707f-2333-65fbfdc612c9"
+    },
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-2b2a314a-6fb5-ae14-c84b-ab13384dcd16"
+    }
+  ],
+  "cudaVersion": "13.0",
+  "writerId": "hrjk11rk7bgle5ybhsgehhigrtjeo0q8"
+}
