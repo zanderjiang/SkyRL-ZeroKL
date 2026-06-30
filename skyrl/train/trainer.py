@@ -1308,10 +1308,15 @@ class RayPPOTrainer:
                 - action_log_probs[training_input["loss_mask"] > 0]
             ).abs()
 
+            # Guard: if every response token is masked (e.g. overlong filtering dropped all
+            # samples this batch), logprobs_diff is empty -> max()/std() raise. Skip the metric.
+            if logprobs_diff.numel() == 0:
+                return training_input
+
             logprobs_diff_max = logprobs_diff.max().item()
             logprobs_diff_min = logprobs_diff.min().item()
             logprobs_diff_mean = logprobs_diff.mean().item()
-            logprobs_diff_std = logprobs_diff.std().item()
+            logprobs_diff_std = logprobs_diff.std().item() if logprobs_diff.numel() > 1 else 0.0
             import os as _os_zk
             if _os_zk.environ.get("SKYRL_ZERO_KL") == "1":
                 # localize the outliers: where do rollout vs trainer logprobs diverge?
