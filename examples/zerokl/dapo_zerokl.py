@@ -92,6 +92,12 @@ def main():
 
     # ---- ROLLOUT: vLLM running Megatron GPTModel ----
     register_gptmodel_to_vllm(args.model)
+    # Zero-KL fix for long responses: pin vLLM's paged-decode flash attention to num_splits=1 so
+    # decode == prefill bitwise at all lengths (else the auto split-KV heuristic drifts >64 tok).
+    if os.environ.get("SKYRL_ZEROKL_FLASH_NUM_SPLITS", "1") == "1":
+        import vllm.v1.attention.backends.flash_attn  # force import before patching
+        from skyrl.backends.skyrl_train.zerokl.vllm_patches import apply_flash_num_splits_patch
+        apply_flash_num_splits_patch()
     from vllm import LLM, SamplingParams
     llm = LLM(model=args.model, tensor_parallel_size=1, dtype="bfloat16", enforce_eager=True,
               gpu_memory_utilization=args.gpu_mem_util, max_model_len=1024, seed=42,

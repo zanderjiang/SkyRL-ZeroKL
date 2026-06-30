@@ -128,6 +128,11 @@ class WorkerWrap(LayerwiseReloadWorkerMixin):
             copied = 0
             materialized = 0
             miss = []
+            # SkyRL-ZeroKL diag: capture EVERY missed name + its magnitude so the name mismatch is
+            # fully visible (the old code only kept the first 3). recv-abs-sum excludes misses, so
+            # missed magnitude is exactly the sender-vs-receiver checksum gap.
+            self._zk_miss_names = getattr(self, "_zk_miss_names", [])
+            self._zk_miss_ck = getattr(self, "_zk_miss_ck", 0.0)
 
             def _set_on_module(root, dotted, value, as_param, requires_grad):
                 # navigate to the owning submodule and replace the param/buffer object so a META
@@ -150,6 +155,9 @@ class WorkerWrap(LayerwiseReloadWorkerMixin):
                     if dest is None:
                         if len(miss) < 3:
                             miss.append(name)
+                        if name not in self._zk_miss_names:
+                            self._zk_miss_names.append(name)
+                            self._zk_miss_ck += float(tensor.float().double().abs().sum())
                         continue
                     tgt_dtype = dest.dtype if dest.dtype.is_floating_point else tensor.dtype
                     src = tensor.to(self.device, tgt_dtype)
@@ -173,6 +181,15 @@ class WorkerWrap(LayerwiseReloadWorkerMixin):
                 _wn = float(_p.float().norm()) if (_p is not None and _p.device.type != "meta") else -1.0
                 print(f"[ZEROKL-SYNC] copied {copied} (materialized {materialized}, cum {self._zerokl_copied}) "
                       f"miss={miss}; live first_w_norm={_wn:.3f}", flush=True)
+                if self._zk_miss_names:
+                    print(f"[ZEROKL-MISS] {len(self._zk_miss_names)} sender names NOT in engine gpt; "
+                          f"missed-abs-sum={self._zk_miss_ck:.6f} (== sender-receiver gap). "
+                          f"names={self._zk_miss_names}", flush=True)
+                    # also show a few of the engine's ACTUAL param names so the rename is obvious
+                    _eng_names = [n for n, _ in target.named_parameters()]
+                    print(f"[ZEROKL-MISS] engine gpt has {len(_eng_names)} params; sample={_eng_names[:6]} ... "
+                          f"emb/out: {[n for n in _eng_names if 'embed' in n or 'output_layer' in n or 'lm_head' in n][:4]}",
+                          flush=True)
             torch.accelerator.synchronize()  # consume IPC tensors before sender drops them
             for weight in weight_list:
                 del weight

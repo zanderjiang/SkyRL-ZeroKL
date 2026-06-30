@@ -196,6 +196,18 @@ class MegatronModelWrapper:
                     cp_group=None,
                     chunk_size=self.cfg.logprobs_chunk_size,  # chunk seq dim to bound peak memory
                 )
+            # SkyRL-ZeroKL probe (A): is the EXTRACTION the residual? Compare Megatron's
+            # from_parallel_logits_to_logprobs against the standalone's plain fp32 log_softmax+gather
+            # on the SAME logits. If they differ, the extraction method contributes the 0.0094.
+            if os.environ.get("SKYRL_ZEROKL_FWD_PROBE") == "1" and packed_seq_params is None:
+                with torch.no_grad():
+                    _ref_lp = torch.log_softmax(logits.float(), dim=-1)
+                    _tgt = sequences[:, 1:]
+                    _ref = _ref_lp[:, :-1].gather(-1, _tgt.unsqueeze(-1)).squeeze(-1)
+                    _n = min(_ref.shape[1], token_logprobs.shape[1])
+                    _d = (_ref[:, -_n:] - token_logprobs[:, -_n:]).abs()
+                    print(f"[ZEROKL-EXTRACT] from_parallel vs log_softmax: max={float(_d.max()):.3e} "
+                          f"mean={float(_d.mean()):.3e} (logits {tuple(logits.shape)})", flush=True)
             return torch.tensor(0.0, device=token_logprobs.device), {"log_probs": token_logprobs}
 
         def forward_step(batch_iter, model):
@@ -281,6 +293,32 @@ class MegatronModelWrapper:
             # Assume all micros have same num_actions
             num_actions = micro_batches[0]["num_actions"]
             log_probs = log_probs[:, -num_actions:]
+            # SkyRL-ZeroKL probe (B): is the forward MACHINERY the residual? Run the standalone's
+            # EXACT forward (bare GPTModel, unpadded single sequence, scoring_mode, attention_mask=None,
+            # plain log_softmax) on micro_batch 0 and compare to the forward_backward_func result.
+            # Large diff => remove_left_padding/recover_left_padding/Float16Module/fbf machinery is the cause.
+            if os.environ.get("SKYRL_ZEROKL_FWD_PROBE") == "1":
+                try:
+                    mb0 = micro_batches[0]
+                    _seq = mb0["sequences"][:1]
+                    _am = mb0["attention_mask"][:1].to(bool)
+                    _na = int(mb0["num_actions"])
+                    _rseq = _seq[0][_am[0]].unsqueeze(0)
+                    _L = _rseq.shape[1]
+                    _pos = torch.arange(_L, device=_rseq.device).unsqueeze(0)
+                    _inner = self.actor_module[0]
+                    for _ in range(4):
+                        _inner = _inner.module if hasattr(_inner, "module") else _inner
+                    with torch.no_grad(), _zerokl_scoring_ctx():
+                        _dl = _inner(input_ids=_rseq, position_ids=_pos, attention_mask=None)[0].float()
+                    _dlp = torch.log_softmax(_dl, dim=-1)
+                    _rids = _rseq[0]
+                    _dresp = _dlp[_L - _na - 1:_L - 1].gather(-1, _rids[_L - _na:].unsqueeze(-1)).squeeze(-1)
+                    _d = (_dresp - log_probs[0, -_na:].float()).abs()
+                    print(f"[ZEROKL-FWDPROBE] direct(bare GPTModel, unpadded) vs forward_backward_func: "
+                          f"max={float(_d.max()):.3e} mean={float(_d.mean()):.3e} L={_L} na={_na}", flush=True)
+                except Exception as _e:
+                    print(f"[ZEROKL-FWDPROBE] failed: {type(_e).__name__}: {_e}", flush=True)
         else:
             # return dummy tensor for non-last pp stages
             device = micro_batches[0]["sequences"].device

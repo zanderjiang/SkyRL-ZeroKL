@@ -110,6 +110,20 @@ def setup_envvars_for_vllm(kwargs, bundle_indices):
             if kwargs.get(_k) != _v:
                 logger.info("[zerokl] forcing engine arg %s=%s (was %s)", _k, _v, kwargs.get(_k))
             kwargs[_k] = _v
+        # EXPERIMENT (env-gated): also force chunked prefill OFF. vLLM rejects this unless
+        # max_num_batched_tokens >= max_model_len, so cap max_model_len when requested and bump
+        # the batched-token budget to match. Tests whether chunked prefill is the residual 0.0103
+        # (the bitwise standalone dapo_zerokl.py runs enable_chunked_prefill=False).
+        if os.environ.get("SKYRL_ZEROKL_NO_CHUNKED_PREFILL") == "1":
+            _mml = int(os.environ.get("SKYRL_ZEROKL_MAX_MODEL_LEN", "0") or 0)
+            if _mml:
+                kwargs["max_model_len"] = _mml
+            _need = _mml or int(kwargs.get("max_model_len") or 0)
+            if _need:
+                kwargs["max_num_batched_tokens"] = max(int(kwargs.get("max_num_batched_tokens") or 0), _need)
+            kwargs["enable_chunked_prefill"] = False
+            logger.info("[zerokl] forcing enable_chunked_prefill=False max_model_len=%s max_num_batched_tokens=%s",
+                        kwargs.get("max_model_len"), kwargs.get("max_num_batched_tokens"))
         # Run Megatron's GPTModel inside vLLM (unified model) so the rollout == trainer. String
         # registration survives mp/async worker subprocesses (each lazily imports the wrapper).
         register_gptmodel_to_vllm()  # cross-process string form

@@ -1,5 +1,21 @@
 # Zero-KL residual: problem handoff
 
+## ⚠️ CORRECTION (2026-06-29): weight delivery is NOT broken
+The "*** RESULT: weight delivery IS broken ***" conclusion below was a **misread of a
+cumulative running checksum**. `vllm_worker.py::load_weights` is called once per param-chunk and
+accumulates `self._zk_recv_ck` across all 255 calls; the "10,475,048" was just the partial sum at
+chunk ~14/255. Live verification at the first sync (1-GPU run):
+`[ZEROKL-SYNC] copied ... cum 255  miss=[]` and
+`RECEIVER recv-abs-sum == engine-gpt-abs-sum == SENDER 89,866,863` **exactly**. So the native sync
+is **bitwise-correct** — every param lands. Do NOT chase a weight-delivery bug.
+
+=> The 0.0103 is a pure **forward-path** difference (identical weights both sides). The
+SkyRL-pipeline-specific deltas vs the bitwise standalone `examples/zerokl/dapo_zerokl.py` (~1e-6)
+are: (1) **chunked prefill** — pipeline runs `enable_chunked_prefill=True`, standalone `False`
+(now toggleable via `SKYRL_ZEROKL_NO_CHUNKED_PREFILL=1` + `SKYRL_ZEROKL_MAX_MODEL_LEN`); and
+(2) the Megatron `forward_backward_func`+padding path vs the standalone's direct `tinner(...)`
+forward. The 1-GPU debug (`run_zerokl_diag_1gpu.sh`) reproduces 0.0094 faithfully, so iterate there.
+
 ## The problem
 In the full SkyRL pipeline (`examples/zerokl/run_megatron_dapo_mimo_7b_zerokl*.sh`, MiMo-7B, TP1),
 `policy/rollout_train_logprobs_abs_diff_mean ≈ 0.0104` (max ~0.49, min 0). That is **worse than

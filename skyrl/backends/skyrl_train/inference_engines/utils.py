@@ -60,7 +60,8 @@ def build_engine_runtime_env(
     if os.environ.get("SKYRL_ZERO_KL"):
         env_vars["SKYRL_ZERO_KL"] = os.environ["SKYRL_ZERO_KL"]
         env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-        for _zk in ("SKYRL_ZEROKL_ENGINE_LOAD_WEIGHTS", "SKYRL_ZEROKL_BISECT"):
+        for _zk in ("SKYRL_ZEROKL_ENGINE_LOAD_WEIGHTS", "SKYRL_ZEROKL_BISECT",
+                    "SKYRL_ZEROKL_NO_CHUNKED_PREFILL", "SKYRL_ZEROKL_MAX_MODEL_LEN"):
             if os.environ.get(_zk):
                 env_vars[_zk] = os.environ[_zk]
     if extra_env_vars:

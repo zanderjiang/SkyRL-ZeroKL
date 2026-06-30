@@ -41,6 +41,43 @@ def apply_vllm_zerokl_env(env: dict | None = None) -> dict:
     return dict(ZEROKL_VLLM_ENV)
 
 
+def apply_flash_num_splits_patch() -> bool:
+    """Force ``num_splits=1`` in vLLM's MAIN flash-attention forward under batch-invariant mode.
+
+    THE zero-KL fix for long responses. vLLM pins ``num_splits=1`` (deterministic single-pass KV
+    reduction == prefill) for the CASCADE attention path (flash_attn.py ~L1194/L1219) but NOT the
+    MAIN non-cascade path (~L796), which only forwards ``scheduler_metadata`` -- and that is ``None``
+    under batch-invariant (``aot_schedule`` is force-disabled at ~L411). So with prefix caching off
+    (our config -> non-cascade) the paged DECODE uses FA's auto split-KV heuristic: 1 split for short
+    KV (decode==prefill bitwise) but >1 split for long KV (decode != prefill -> the rollout_train
+    residual that grows with response length: ~0 @64 tok, ~0.017 @256). Mirrors TorchTitan's
+    ``num_splits=1``-in-batch-invariant-mode (rl/models/attention.py) but works WITHOUT torch's
+    ``varlen_attn_out`` (absent in torch 2.11) by pinning vLLM's vendored kernel directly.
+
+    Wraps the module-global ``flash_attn_varlen_func`` to inject ``num_splits=1`` when it is not
+    already specified and VLLM_BATCH_INVARIANT=1. Idempotent. Returns True if applied."""
+    try:
+        import vllm.v1.attention.backends.flash_attn as _fa
+    except Exception as e:  # pragma: no cover
+        logger.warning("[zerokl] flash num_splits patch: cannot import flash_attn backend: %s", e)
+        return False
+    if getattr(_fa, "_zerokl_num_splits_patched", False):
+        return True
+    _orig = _fa.flash_attn_varlen_func
+
+    def _wrapped(*args, **kwargs):
+        if os.environ.get("VLLM_BATCH_INVARIANT") == "1" and "num_splits" not in kwargs:
+            kwargs["num_splits"] = 1
+        return _orig(*args, **kwargs)
+
+    _wrapped._zerokl_orig = _orig
+    _fa.flash_attn_varlen_func = _wrapped
+    _fa._zerokl_num_splits_patched = True
+    logger.info("[zerokl] patched flash_attn_varlen_func -> num_splits=1 (main decode path, batch-invariant)")
+    print("[ZEROKL-ATTN] flash_attn_varlen_func pinned to num_splits=1 (decode==prefill fix)", flush=True)
+    return True
+
+
 def zerokl_engine_arg_overrides() -> dict:
     """Engine-arg overrides the caller must merge into the vLLM engine config.
 
