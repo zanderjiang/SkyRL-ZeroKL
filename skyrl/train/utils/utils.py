@@ -741,7 +741,10 @@ def prepare_runtime_environment(cfg: SkyRLTrainConfig) -> dict[str, str]:
         # in-process vLLM so the GPTModel string-registration in the engine actor reaches model build
         env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
         for _zk in ("SKYRL_ZEROKL_ENGINE_LOAD_WEIGHTS", "SKYRL_ZEROKL_SCORING_FORWARD", "SKYRL_ZEROKL_TRAINER_PATCHES", "SKYRL_ZEROKL_BISECT",
-                    "SKYRL_ZEROKL_NO_CHUNKED_PREFILL", "SKYRL_ZEROKL_MAX_MODEL_LEN", "SKYRL_ZEROKL_FWD_PROBE"):
+                    "SKYRL_ZEROKL_NO_CHUNKED_PREFILL", "SKYRL_ZEROKL_MAX_MODEL_LEN", "SKYRL_ZEROKL_FWD_PROBE",
+                    # nightly no-TE bitwise stack: local Megatron layer spec (trainer + engine) + the
+                    # CUSTOM num_splits=1 varlen attention backend selection. Must reach ALL actors.
+                    "SKYRL_ZEROKL_LOCAL_SPEC", "VLLM_BATCH_INVARIANT", "VARLEN_FORCE_NUM_SPLITS_1"):
             if os.environ.get(_zk):
                 env_vars[_zk] = os.environ[_zk]
 
