@@ -52,6 +52,18 @@ def compute_minibatch_rollout_logprob_diff_metrics(
                   f"top diffs={[round(x,3) for x in _tv.tolist()]} "
                   f"train@={[round(x,3) for x in _al[_ti].tolist()]} "
                   f"rollout@={[round(x,3) for x in _rl[_ti].tolist()]}", flush=True)
+            # mp-worker prints don't surface in the run log -> also dump the outlier tokens to a shared
+            # file so the ground-truth engine-vs-trainer divergence is observable. _ti are positions in
+            # the masked (response-token) sequence; train@ = trainer recompute logprob, rollout@ = engine.
+            try:
+                _flat_idx = _m.nonzero(as_tuple=True)[0][_ti].tolist()
+                with open("/mnt/local_storage/zerokl_probe.log", "a") as _pf:
+                    _pf.write(f"DIFF n={_ad.numel()} mean={float(_ad.mean()):.6f} max={float(_ad.max()):.6f} "
+                              f"frac>0.05={_fb:.3f} | top={[round(x,4) for x in _tv.tolist()]} "
+                              f"flat_pos={_flat_idx} train@={[round(x,4) for x in _al[_ti].tolist()]} "
+                              f"rollout@={[round(x,4) for x in _rl[_ti].tolist()]}\n")
+            except Exception:
+                pass
     return {
         MINIBATCH_ROLLOUT_LOGPROB_DIFF_MEAN_KEY: masked_mean(abs_diff, loss_mask).item(),
         MINIBATCH_ROLLOUT_LOGPROB_DIFF_SQ_MEAN_KEY: masked_mean(abs_diff.square(), loss_mask).item(),
