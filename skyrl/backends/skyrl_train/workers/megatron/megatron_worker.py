@@ -901,9 +901,15 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             if (os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1"
                     and os.environ.get("SKYRL_ZEROKL_VARLEN_ATTN", "1") == "1"):
                 from skyrl.backends.skyrl_train.zerokl.megatron_varlen_attn import (
+                    enable_trainer_batch_invariant,
                     swap_trainer_core_attention_varlen,
                 )
 
+                # (1) non-attention ops bitwise-match the engine (same vLLM batch-invariant kernels);
+                # (2) attention bitwise-matches the engine (same torch varlen kernel). Together ->
+                # minibatch_rollout_logprobs_abs_diff mean==max==min==0.
+                if os.environ.get("SKYRL_ZEROKL_BATCH_INVARIANT", "1") == "1":
+                    enable_trainer_batch_invariant()
                 swap_trainer_core_attention_varlen(self.actor_module)
             else:
                 _why = "LOCAL_SPEC (no-TE)" if os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1" else "TRAINER_PATCHES=0"

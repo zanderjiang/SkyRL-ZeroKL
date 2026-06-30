@@ -58,6 +58,24 @@ class TorchVarlenCoreAttn(nn.Module):
         return out.reshape(sq, b, self.num_heads * self.head_dim)
 
 
+def enable_trainer_batch_invariant():
+    """Enable the SAME vLLM batch-invariant aten ops the engine runs under VLLM_BATCH_INVARIANT
+    (mm/addmm/matmul/linear/_log_softmax/mean.dim/rms_norm), so the trainer's NON-attention ops are
+    bitwise-identical to the rollout. Without this the trainer GEMM/RMSNorm/logits use ordinary
+    (batch-variant) kernels and leave a small residual even after the attention kernel is matched.
+    Uses vLLM's implementation (not megatron-core's) so trainer and engine share the exact same kernels.
+    Idempotent (vLLM guards with a module-global flag)."""
+    try:
+        from vllm.model_executor.layers.batch_invariant import enable_batch_invariant_mode
+    except Exception as e:  # pragma: no cover
+        logger.warning("[zerokl] vLLM batch_invariant unavailable, trainer non-attn not batch-invariant: %s", e)
+        return False
+    enable_batch_invariant_mode()
+    print("[ZEROKL-TRAINER] enabled vLLM batch-invariant aten ops (mm/addmm/linear/log_softmax/mean) "
+          "== engine -> bitwise non-attention", flush=True)
+    return True
+
+
 def swap_trainer_core_attention_varlen(gpt_modules):
     """Replace each decoder layer's core_attention with the torch-varlen kernel (== rollout engine)."""
     modules = gpt_modules if isinstance(gpt_modules, (list, tuple)) else [gpt_modules]
