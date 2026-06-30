@@ -165,8 +165,10 @@ def main():
         if not samples:
             print(f"{step:>4} {all_r.mean():>7.3f} [{rt.mean():>9.2e},{rt.max():>9.2e}]  (all groups filtered)", flush=True)
             if wb is not None:
-                wb.log({"reward/mean": float(all_r.mean()), "policy/rollout_train_abs_diff_mean": float(rt.mean()),
-                        "policy/rollout_train_abs_diff_max": float(rt.max()), "dapo/groups_filtered": 1}, step=step)
+                wb.log({"reward/avg_raw_reward": float(all_r.mean()),
+                        "policy/rollout_train_logprobs_abs_diff_mean": float(rt.mean()),
+                        "policy/rollout_train_logprobs_abs_diff_max": float(rt.max()),
+                        "dapo/groups_filtered": 1}, step=step)
             continue
 
         # DAPO dual-clip / clip-higher loss, token_mean
@@ -191,11 +193,11 @@ def main():
         print(f"{step:>4} {all_r.mean():>7.3f} [{rt.mean():>9.2e},{rt.max():>9.2e}] "
               f"[{rr.mean():>8.5f},{rr.max():>8.5f}] {loss_val:>9.4f}", flush=True)
         if wb is not None:
-            wb.log({"reward/mean": float(all_r.mean()),
-                    "policy/rollout_train_abs_diff_mean": float(rt.mean()),
-                    "policy/rollout_train_abs_diff_max": float(rt.max()),
+            wb.log({"reward/avg_raw_reward": float(all_r.mean()),
+                    "policy/rollout_train_logprobs_abs_diff_mean": float(rt.mean()),
+                    "policy/rollout_train_logprobs_abs_diff_max": float(rt.max()),
                     "policy/is_ratio_mean": float(rr.mean()), "policy/is_ratio_max": float(rr.max()),
-                    "policy/is_ratio_min": float(rr.min()), "policy/loss": float(loss_val),
+                    "policy/is_ratio_min": float(rr.min()), "policy/policy_loss": float(loss_val),
                     "dapo/samples_kept": len(samples), "dapo/groups_filtered": 0}, step=step)
 
     print("\n==> nightly DAPO zero-KL: rollout_train (behavior vs engine prefill rescore) is BITWISE 0 "
