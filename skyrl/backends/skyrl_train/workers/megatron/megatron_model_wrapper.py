@@ -317,8 +317,23 @@ class MegatronModelWrapper:
                     _d = (_dresp - log_probs[0, -_na:].float()).abs()
                     print(f"[ZEROKL-FWDPROBE] direct(bare GPTModel, unpadded) vs forward_backward_func: "
                           f"max={float(_d.max()):.3e} mean={float(_d.mean()):.3e} L={_L} na={_na}", flush=True)
+                    # mp-worker prints don't surface in the run log -> also dump to shared storage.
+                    try:
+                        # which token positions diverge (relative to the na response tokens)
+                        _bad = (_d > 1e-4).nonzero(as_tuple=True)[0].tolist()[:12]
+                        with open("/mnt/local_storage/zerokl_probe.log", "a") as _pf:
+                            _pf.write(f"FWDPROBE max={float(_d.max()):.3e} mean={float(_d.mean()):.3e} "
+                                      f"L={_L} na={_na} bad_resp_idx={_bad} "
+                                      f"vals={[round(float(_d[i]),4) for i in _bad]}\n")
+                    except Exception:
+                        pass
                 except Exception as _e:
                     print(f"[ZEROKL-FWDPROBE] failed: {type(_e).__name__}: {_e}", flush=True)
+                    try:
+                        with open("/mnt/local_storage/zerokl_probe.log", "a") as _pf:
+                            _pf.write(f"FWDPROBE FAILED: {type(_e).__name__}: {_e}\n")
+                    except Exception:
+                        pass
         else:
             # return dummy tensor for non-last pp stages
             device = micro_batches[0]["sequences"].device

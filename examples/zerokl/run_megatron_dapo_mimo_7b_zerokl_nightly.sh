@@ -88,6 +88,10 @@ export SKYRL_ZEROKL_MAX_MODEL_LEN=$((MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH))
 export _SKYRL_USE_NEW_INFERENCE=0
 export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=1800
 # NOTE: SKYRL_ZEROKL_TRAINER_PATCHES intentionally UNSET (TE patches skipped on the no-TE stack).
+# Diagnostic: localize the residual -> trainer-machinery (padding/Float16Module/forward_backward_func)
+# via [ZEROKL-EXTRACT] (from_parallel vs plain log_softmax) and [ZEROKL-FWDPROBE] (bare unpadded
+# GPTModel vs fbf result). Both print from the trainer worker (whose stdout IS forwarded).
+export SKYRL_ZEROKL_FWD_PROBE=1
 DISTRIBUTED_EXECUTOR_BACKEND="mp"
 
 uv run --isolated --extra zerokl -m examples.train.algorithms.dapo.main_dapo \
