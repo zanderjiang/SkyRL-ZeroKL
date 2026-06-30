@@ -225,6 +225,16 @@ class GPTModelVLLMWrapper(nn.Module):
         max_pos = int(getattr(vllm_config.model_config, "max_model_len", 8192))
         self._rope = _PositionIndexedRoPE(self.gpt.rotary_pos_emb, max_pos)
         self.gpt.rotary_pos_emb = self._rope
+        # Patch vLLM's sampler logprob kernel to the trainer's exact formula HERE (in the mp worker
+        # process where the sampler runs) -- doing it in the engine actor (setup_envvars_for_vllm) does
+        # NOT reach the mp worker. This is the last piece for bitwise rollout==train (the fused Triton
+        # logprob kernel otherwise bypasses aten and diverges from the trainer on a few tokens).
+        if self._local_spec:
+            try:
+                from skyrl.backends.skyrl_train.zerokl.vllm_patches import patch_vllm_logprobs_batch_invariant
+                patch_vllm_logprobs_batch_invariant()
+            except Exception as _e:  # pragma: no cover
+                print(f"[ZEROKL-WRAP] logprob patch failed: {type(_e).__name__}: {_e}", flush=True)
         self._fwd_probe_done = False
         with torch.no_grad():
             _w = next((p for n, p in self.gpt.named_parameters() if "weight" in n), None)
