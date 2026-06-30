@@ -870,7 +870,15 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         # SkyRL-ZeroKL: install the Megatron-side bitwise-parity patches (fp32 RoPE,
         # vLLM C++ RMSNorm, batch-invariant GEMM/log_softmax) right after the model is
         # built. Gated by env so it is opt-in and reversible. See zerokl/README.md.
-        if os.environ.get("SKYRL_ZERO_KL") == "1" and os.environ.get("SKYRL_ZEROKL_TRAINER_PATCHES", "1") == "1":
+        # The TE-targeted patches (fp32 RoPE / vops RMSNorm / TE batch-invariant GEMM) assume
+        # TransformerEngine is present. On the nightly LOCAL-spec (no-TE) stack they must be SKIPPED:
+        # megatron-core's _te_patch_for_batch_invariant() hard-imports transformer_engine and crashes,
+        # and the local-spec trainer is already plain torch (engine batch-invariance comes from
+        # VLLM_BATCH_INVARIANT). Matching the trainer attention kernel to the engine for bitwise
+        # rollout==train is handled separately (the varlen-kernel match), not by these patches.
+        if (os.environ.get("SKYRL_ZERO_KL") == "1"
+                and os.environ.get("SKYRL_ZEROKL_TRAINER_PATCHES", "1") == "1"
+                and os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") != "1"):
             from skyrl.backends.skyrl_train.zerokl import apply_megatron_zerokl_patches
 
             apply_megatron_zerokl_patches()
@@ -885,7 +893,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 swap_trainer_core_attention_flash(self.actor_module)
                 print("[ZEROKL-TRAINER] swapped TE core_attention -> flash_attn_varlen (== engine vLLM flash)", flush=True)
         elif os.environ.get("SKYRL_ZERO_KL") == "1":
-            print("[ZEROKL-TRAINER] SKIPPED megatron zerokl patches (SKYRL_ZEROKL_TRAINER_PATCHES=0) -- vanilla forward", flush=True)
+            _why = "LOCAL_SPEC (no-TE)" if os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1" else "TRAINER_PATCHES=0"
+            print(f"[ZEROKL-TRAINER] SKIPPED megatron zerokl TE patches ({_why}) -- vanilla local-spec forward", flush=True)
 
         if self._local_rank == 0 and not os.path.exists(
             model_path
