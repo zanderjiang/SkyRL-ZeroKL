@@ -57,6 +57,31 @@ def main():
 
     # ---- TRAINER: a second local-spec MiMo GPTModel (same weights), trainable ----
     trainer, _cfg = build_mimo_gptmodel(torch.device("cuda"), dtype=torch.bfloat16)
+    # Match the ENGINE's attention kernel (FA3 varlen, causal) so the grad forward == the rollout
+    # forward -> is_ratio ~1 (fully on-policy gradient, no-compromise zero-KL). The default local
+    # DotProductAttention (SDPA) diverges from the engine's varlen kernel on outlier tokens.
+    import flash_attn_interface as _fa3
+    _HD = _cfg.kv_channels; _NH = _cfg.num_attention_heads; _NKV = _cfg.num_query_groups
+    class _FlashVarlenAttn(torch.nn.Module):
+        def __init__(self):
+            super().__init__(); self.scale = _HD ** -0.5
+        def forward(self, query, key, value, attention_mask=None, attn_mask_type=None,
+                    attention_bias=None, packed_seq_params=None):
+            sq, b = query.shape[0], query.shape[1]
+            q = query.reshape(sq * b, _NH, _HD); k = key.reshape(sq * b, _NKV, _HD); v = value.reshape(sq * b, _NKV, _HD)
+            cu = torch.tensor([0, sq * b], device=q.device, dtype=torch.int32)
+            o = _fa3.flash_attn_varlen_func(q, k, v, cu_seqlens_q=cu, cu_seqlens_k=cu,
+                                            max_seqlen_q=sq * b, max_seqlen_k=sq * b,
+                                            softmax_scale=self.scale, causal=True)
+            o = o[0] if isinstance(o, tuple) else o
+            return o.reshape(sq, b, _NH * _HD)
+    _ns = 0
+    _tin = trainer.module if hasattr(trainer, "module") else trainer
+    for _ly in _tin.decoder.layers:
+        _sa = getattr(_ly, "self_attention", None)
+        if _sa is not None:
+            _sa.core_attention = _FlashVarlenAttn(); _ns += 1
+    print(f"[nightly-dapo] swapped trainer core_attention -> FA3 flash_attn_varlen (causal) on {_ns} layers", flush=True)
     for p in trainer.parameters():
         p.requires_grad_(True)
     trainer.train()
