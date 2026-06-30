@@ -31,9 +31,19 @@ def main():
     ap.add_argument("--eps_high", type=float, default=0.28)
     ap.add_argument("--clip_c", type=float, default=10.0)
     ap.add_argument("--gpu_mem", type=float, default=0.55)
+    ap.add_argument("--match_kernel", type=int, default=0)  # swap trainer attn -> FA3 varlen (hurts; off)
+    ap.add_argument("--max_grad_norm", type=float, default=1.0)
+    ap.add_argument("--wandb", type=int, default=0)
+    ap.add_argument("--wandb_project", default="zerokl_mimo_nightly")
+    ap.add_argument("--wandb_run", default="dapo_zerokl_nightly")
     args = ap.parse_args()
     random.seed(0); np.random.seed(0); torch.manual_seed(0)
     MODEL = "/mnt/local_storage/models/MiMo-7B-RL"
+    wb = None
+    if args.wandb:
+        import wandb
+        wb = wandb.init(project=args.wandb_project, name=args.wandb_run, config=vars(args))
+        print(f"[nightly-dapo] wandb: project={args.wandb_project} run={args.wandb_run}", flush=True)
 
     import varlen_backend  # noqa: F401  -> registers CUSTOM (num_splits=1) attention backend
     from vllm import LLM, SamplingParams
@@ -57,31 +67,32 @@ def main():
 
     # ---- TRAINER: a second local-spec MiMo GPTModel (same weights), trainable ----
     trainer, _cfg = build_mimo_gptmodel(torch.device("cuda"), dtype=torch.bfloat16)
-    # Match the ENGINE's attention kernel (FA3 varlen, causal) so the grad forward == the rollout
-    # forward -> is_ratio ~1 (fully on-policy gradient, no-compromise zero-KL). The default local
-    # DotProductAttention (SDPA) diverges from the engine's varlen kernel on outlier tokens.
-    import flash_attn_interface as _fa3
-    _HD = _cfg.kv_channels; _NH = _cfg.num_attention_heads; _NKV = _cfg.num_query_groups
-    class _FlashVarlenAttn(torch.nn.Module):
-        def __init__(self):
-            super().__init__(); self.scale = _HD ** -0.5
-        def forward(self, query, key, value, attention_mask=None, attn_mask_type=None,
-                    attention_bias=None, packed_seq_params=None):
-            sq, b = query.shape[0], query.shape[1]
-            q = query.reshape(sq * b, _NH, _HD); k = key.reshape(sq * b, _NKV, _HD); v = value.reshape(sq * b, _NKV, _HD)
-            cu = torch.tensor([0, sq * b], device=q.device, dtype=torch.int32)
-            o = _fa3.flash_attn_varlen_func(q, k, v, cu_seqlens_q=cu, cu_seqlens_k=cu,
-                                            max_seqlen_q=sq * b, max_seqlen_k=sq * b,
-                                            softmax_scale=self.scale, causal=True)
-            o = o[0] if isinstance(o, tuple) else o
-            return o.reshape(sq, b, _NH * _HD)
-    _ns = 0
-    _tin = trainer.module if hasattr(trainer, "module") else trainer
-    for _ly in _tin.decoder.layers:
-        _sa = getattr(_ly, "self_attention", None)
-        if _sa is not None:
-            _sa.core_attention = _FlashVarlenAttn(); _ns += 1
-    print(f"[nightly-dapo] swapped trainer core_attention -> FA3 flash_attn_varlen (causal) on {_ns} layers", flush=True)
+    # OPTIONAL (off by default): match the engine's FA3 varlen attention kernel in the trainer.
+    # NOTE: empirically this INCREASED is_ratio outliers (->1000+) and destabilized the toy-reward
+    # run; the default local DotProductAttention (SDPA) trainer gives smaller is_ratio (~166) and a
+    # stable climbing reward. Keep SDPA unless investigating the cross-runtime kernel match.
+    if args.match_kernel:
+        import flash_attn_interface as _fa3
+        _HD = _cfg.kv_channels; _NH = _cfg.num_attention_heads; _NKV = _cfg.num_query_groups
+        class _FlashVarlenAttn(torch.nn.Module):
+            def __init__(self):
+                super().__init__(); self.scale = _HD ** -0.5
+            def forward(self, query, key, value, attention_mask=None, attn_mask_type=None,
+                        attention_bias=None, packed_seq_params=None):
+                sq, b = query.shape[0], query.shape[1]
+                q = query.reshape(sq * b, _NH, _HD); k = key.reshape(sq * b, _NKV, _HD); v = value.reshape(sq * b, _NKV, _HD)
+                cu = torch.tensor([0, sq * b], device=q.device, dtype=torch.int32)
+                o = _fa3.flash_attn_varlen_func(q, k, v, cu_seqlens_q=cu, cu_seqlens_k=cu,
+                                                max_seqlen_q=sq * b, max_seqlen_k=sq * b,
+                                                softmax_scale=self.scale, causal=True)
+                o = o[0] if isinstance(o, tuple) else o
+                return o.reshape(sq, b, _NH * _HD)
+        _tin = trainer.module if hasattr(trainer, "module") else trainer
+        for _ly in _tin.decoder.layers:
+            _sa = getattr(_ly, "self_attention", None)
+            if _sa is not None:
+                _sa.core_attention = _FlashVarlenAttn()
+        print("[nightly-dapo] swapped trainer core_attention -> FA3 flash_attn_varlen (causal)", flush=True)
     for p in trainer.parameters():
         p.requires_grad_(True)
     trainer.train()
@@ -153,6 +164,9 @@ def main():
         all_r = np.array([s["reward"] for g in groups for s in g])
         if not samples:
             print(f"{step:>4} {all_r.mean():>7.3f} [{rt.mean():>9.2e},{rt.max():>9.2e}]  (all groups filtered)", flush=True)
+            if wb is not None:
+                wb.log({"reward/mean": float(all_r.mean()), "policy/rollout_train_abs_diff_mean": float(rt.mean()),
+                        "policy/rollout_train_abs_diff_max": float(rt.max()), "dapo/groups_filtered": 1}, step=step)
             continue
 
         # DAPO dual-clip / clip-higher loss, token_mean
@@ -169,11 +183,20 @@ def main():
                 pg = torch.minimum(pg, torch.full_like(pg, -a * args.clip_c))
             loss = pg.sum() / max(tot_tok, 1)
             loss.backward(); loss_val += loss.item(); ratios += ratio.detach().tolist()
+        gnorm = torch.nn.utils.clip_grad_norm_([p for p in trainer.parameters() if p.requires_grad],
+                                               args.max_grad_norm)
         opt.step()
         native_sync()
         rr = np.array(ratios)
         print(f"{step:>4} {all_r.mean():>7.3f} [{rt.mean():>9.2e},{rt.max():>9.2e}] "
               f"[{rr.mean():>8.5f},{rr.max():>8.5f}] {loss_val:>9.4f}", flush=True)
+        if wb is not None:
+            wb.log({"reward/mean": float(all_r.mean()),
+                    "policy/rollout_train_abs_diff_mean": float(rt.mean()),
+                    "policy/rollout_train_abs_diff_max": float(rt.max()),
+                    "policy/is_ratio_mean": float(rr.mean()), "policy/is_ratio_max": float(rr.max()),
+                    "policy/is_ratio_min": float(rr.min()), "policy/loss": float(loss_val),
+                    "dapo/samples_kept": len(samples), "dapo/groups_filtered": 0}, step=step)
 
     print("\n==> nightly DAPO zero-KL: rollout_train (behavior vs engine prefill rescore) is BITWISE 0 "
           "because engine decode==prefill (varlen num_splits=1 + local-spec batch-invariant). "
