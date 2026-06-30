@@ -11,6 +11,11 @@ import torch.distributed
 import torch.nn as nn
 from huggingface_hub import snapshot_download
 from loguru import logger
+
+# Import the zerokl package FIRST: it installs the no-TransformerEngine import guard (no-op unless
+# SKYRL_ZEROKL_LOCAL_SPEC=1) before megatron.bridge's eager model-zoo import hits an unguarded
+# `import transformer_engine`. Safe on the production TE stack (guard is a no-op when TE is present).
+import skyrl.backends.skyrl_train.zerokl  # noqa: F401
 from megatron.bridge import AutoBridge
 
 # NOTE: megatron-bridge's LoRA layers hard-import `transformer_engine` at module load

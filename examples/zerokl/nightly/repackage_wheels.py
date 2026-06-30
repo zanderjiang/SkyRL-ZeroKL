@@ -19,7 +19,10 @@ import sys
 import zipfile
 
 OUT_DIR = os.environ.get("ZEROKL_WHEELS_DIR", "/mnt/local_storage/zerokl-wheels")
-PKGS = ["torch", "vllm", "triton"]
+# All four are installed in the proven venv but GC'd from / absent on usable public indexes
+# (flash_attn_3 is a ~1.5GB compiled FA3 wheel). Reconstruct them as local file:// sources for
+# the `zerokl` uv extra so the Anyscale Ray actor hook can resolve the exact validated binaries.
+PKGS = ["torch", "vllm", "triton", "flash_attn_3"]
 
 
 def wheel_filename(dist):

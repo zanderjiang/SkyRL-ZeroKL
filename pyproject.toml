@@ -179,6 +179,13 @@ zerokl = [
     "torch==2.14.0.dev20260620; sys_platform == 'linux'",
     "triton==3.7.1; sys_platform == 'linux'",
     "vllm==1.0.0.dev20260620; sys_platform == 'linux'",
+    # FA3: provides `flash_attn_interface`, which torch's FA3 activation imports for the CUSTOM
+    # varlen num_splits=1 backend. Reconstructed local wheel (compiled, ~1.5GB; not on a usable index).
+    "flash-attn-3==3.0.0; sys_platform == 'linux'",
+    # nvidia-modelopt onnx-export deps (present in the proven venv; modelopt pulls them).
+    "onnx; sys_platform == 'linux'",
+    "onnxscript; sys_platform == 'linux'",
+    "nvdlfw-inspect; sys_platform == 'linux'",
     "megatron-core; sys_platform == 'linux' and python_version >= '3.12'",
     "megatron-bridge; sys_platform == 'linux' and python_version >= '3.12'",
     "nvidia-modelopt; sys_platform == 'linux'",
@@ -281,6 +288,38 @@ override-dependencies = [
     "flashinfer-cubin==0.6.12; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
+# ZeroKL: megatron-bridge 0.5.0 hard-requires optional vision/diffusion/logging integrations
+# (open-clip-torch, timm, qwen-vl-utils, diffusers, comet-ml, mlflow, nvidia-resiliency-ext,
+# flash-linear-attention) that the proven nightly venv runs WITHOUT. open-clip-torch + timm pull
+# torchvision, which (a) has no torch-2.14 wheel and (b) makes transformers eagerly import
+# torchvision.io -- breaking the text-only DAPO path. Drop them so the zerokl env matches the
+# proven venv. (uv replaces the whole requires-dist; megatron-core/torch/etc. are also pinned
+# explicitly in the zerokl extra, so nothing real is lost.)
+[[tool.uv.dependency-metadata]]
+name = "megatron-bridge"
+version = "0.5.0"
+requires-dist = [
+    "accelerate",
+    "datasets>=2.20.0",
+    "einops",
+    "flashinfer-python",
+    "hydra-core<=1.3.2,>1.3",
+    "megatron-core",
+    "mistral-common>=1.10.0",
+    "omegaconf>=2.3.0",
+    "peft>=0.18.1",
+    "pyyaml>=6.0.2",
+    "regex>=2024.11.6",
+    "rich",
+    "six>=1.17.0",
+    "tensorboard>=2.19.0",
+    "torch>=2.6.0",
+    "tqdm>=4.67.1",
+    "transformers",
+    "typing-extensions",
+    "wandb>=0.25.0",
+]
+
 [tool.uv.extra-build-dependencies]
 flash-attn = [{requirement = "torch", match-runtime = true}]
 transformer-engine = [{requirement = "torch", match-runtime = true}, "build_tools", "ninja"]
@@ -344,6 +383,10 @@ vllm = [
 # ZeroKL: local reconstructed triton nightly wheel (matches torch 2.14's pinned 3.7.1+git5d6048aa).
 triton = [
     { path = "/mnt/local_storage/zerokl-wheels/triton-3.7.1+git5d6048aa-cp312-cp312-manylinux_2_27_x86_64.whl", extra = "zerokl" },
+]
+# ZeroKL: local reconstructed FA3 wheel (provides flash_attn_interface for the varlen backend).
+flash-attn-3 = [
+    { path = "/mnt/local_storage/zerokl-wheels/flash_attn_3-3.0.0-cp39-abi3-manylinux_2_28_x86_64.whl", extra = "zerokl" },
 ]
 # torch-2.11 wheels for these three aren't published upstream; built locally
 # on erictang000 forks (cu128 / cxx11abiTRUE / py3.12). flash-attn has its

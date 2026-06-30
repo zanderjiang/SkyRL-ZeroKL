@@ -18,6 +18,13 @@ Typical wiring:
 Scope: Qwen3 dense. MoE / hybrid / MLA extension points are marked ``# EXTEND:``.
 """
 
+# Install the no-TransformerEngine import guard FIRST -- before anything that may import
+# megatron.bridge (its eager model-zoo import has 3 unguarded `import transformer_engine`). No-op
+# unless SKYRL_ZEROKL_LOCAL_SPEC=1 and TE is genuinely absent (the nightly bitwise stack).
+from .no_te_guard import install_no_te_guard
+
+install_no_te_guard()
+
 from .megatron_patches import (
     apply_megatron_zerokl_patches,
     revert_megatron_zerokl_patches,
