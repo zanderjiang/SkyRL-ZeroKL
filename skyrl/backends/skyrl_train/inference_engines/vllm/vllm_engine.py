@@ -130,6 +130,21 @@ def setup_envvars_for_vllm(kwargs, bundle_indices):
         hf_overrides = dict(kwargs.get("hf_overrides") or {})
         hf_overrides["architectures"] = [VLLM_MODEL_NAME]
         kwargs["hf_overrides"] = hf_overrides
+        # Nightly bitwise path (no-TE local spec): select the CUSTOM PyTorch-varlen attention
+        # backend (num_splits=1 -> bitwise decode==prefill at all lengths). Importing the module
+        # registers @register_backend(CUSTOM); run in-process so it is visible to the engine. This
+        # is what drives rollout_train_logprobs_abs_diff to a true 0 (vs the ~0.01 floor of vLLM's
+        # default flash backend, whose split-K heuristic makes long-context decode != prefill).
+        if os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1":
+            from skyrl.backends.skyrl_train.zerokl import varlen_backend  # noqa: F401
+
+            if varlen_backend.register_varlen_custom_backend():
+                kwargs["attention_backend"] = "CUSTOM"
+                logger.info("[zerokl] using CUSTOM varlen attention backend "
+                            "(num_splits=1, bitwise decode==prefill)")
+            else:
+                logger.warning("[zerokl] torch.nn.attention.varlen unavailable; "
+                               "CUSTOM backend NOT selected (zero-KL will not be bitwise)")
         # NOTE: for the registration to reach spawned mp/async workers, run the engine in-process
         # (VLLM_ENABLE_V1_MULTIPROCESSING=0) OR expose the wrapper as a vLLM general plugin. The
         # in-process path is validated first; the plugin path is the production form. See

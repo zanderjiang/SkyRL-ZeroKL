@@ -162,6 +162,24 @@ class GPTModelVLLMWrapper(nn.Module):
         mp.apply_rope_fusion = False
         mp.attention_backend = AttnBackend.flash
         mp.gradient_accumulation_fusion = False
+        # Nightly no-TE stack: force Megatron LOCAL layer spec so the engine GPTModel uses the
+        # SAME plain-torch ops as the local-spec trainer (megatron_worker SKYRL_ZEROKL_LOCAL_SPEC).
+        # Bitwise zero-KL comes from VLLM_BATCH_INVARIANT + num_splits=1 attention over this
+        # batch-invariant local-spec forward -- NOT from the TE-targeted megatron patches below.
+        self._local_spec = os.environ.get("SKYRL_ZEROKL_LOCAL_SPEC") == "1"
+        if self._local_spec:
+            from megatron.bridge.models.gpt_provider import local_layer_spec
+
+            mp.transformer_layer_spec = local_layer_spec
+            print("[ZEROKL-WRAP] forced Megatron LOCAL layer spec (no TransformerEngine)", flush=True)
+        # Disable MTP (multi-token prediction) to MATCH the trainer, which drops it for training
+        # (megatron_worker.init_configs: mtp_num_layers -> None). MiMo-7B ships MTP layers; if the
+        # engine keeps them but the trainer doesn't, the two GPTModels differ (and the local-spec MTP
+        # block spec build itself fails). Both sides must be the plain backbone for bitwise zero-KL.
+        if getattr(mp, "mtp_num_layers", None):
+            print(f"[ZEROKL-WRAP] disabling MTP (mtp_num_layers={mp.mtp_num_layers} -> None) to match trainer",
+                  flush=True)
+            mp.mtp_num_layers = None
         # CRITICAL for zero-KL: mirror the trainer's transformers-v5 RoPE-base workaround
         # (megatron_worker make_megatron_provider). transformers v5 moves rope_theta into
         # rope_parameters, so megatron-bridge's CONFIG_MAPPING reads the now-missing config.rope_theta
@@ -180,10 +198,15 @@ class GPTModelVLLMWrapper(nn.Module):
         self._gpt_list = gpt
         self.gpt = gpt[0].module if hasattr(gpt[0], "module") else gpt[0]
 
-        # numeric recipe: batch-invariant kernels + fp32 RoPE + vLLM norms.
-        # skip aten re-registration: vLLM (VLLM_BATCH_INVARIANT=1) already registered mm/addmm/
-        # _log_softmax/mean; we only add the TE GEMM/RMSNorm + RoPE patches here.
-        apply_megatron_zerokl_patches(skip_aten_registration=True)
+        # numeric recipe. On the LOCAL-spec nightly stack the model is already plain torch
+        # (SDPA/RMSNorm/F.linear) and batch-invariance comes entirely from VLLM_BATCH_INVARIANT=1
+        # -- the apply_megatron_zerokl_patches helpers target TE kernels (fused norm / TE GEMM) that
+        # do not exist here, so we skip them (this is exactly what the proven standalone build does).
+        # On the production TE stack (flag unset) we keep the original patch path.
+        if not self._local_spec:
+            # skip aten re-registration: vLLM (VLLM_BATCH_INVARIANT=1) already registered mm/addmm/
+            # _log_softmax/mean; we only add the TE GEMM/RMSNorm + RoPE patches here.
+            apply_megatron_zerokl_patches(skip_aten_registration=True)
 
         # swap attention -> vLLM paged
         cfg = self.gpt.config
