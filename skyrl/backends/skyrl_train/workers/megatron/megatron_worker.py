@@ -12,8 +12,11 @@ import torch.nn as nn
 from huggingface_hub import snapshot_download
 from loguru import logger
 from megatron.bridge import AutoBridge
-from megatron.bridge.peft.canonical_lora import CanonicalLoRA
-from megatron.bridge.peft.lora import LoRA
+
+# NOTE: megatron-bridge's LoRA layers hard-import `transformer_engine` at module load
+# (peft/lora_layers.py). On the no-TE nightly/zero-KL stack TE is intentionally absent
+# (so megatron-core's HAVE_TE graceful fallback engages), so these are imported lazily
+# inside configure_lora() — the only place they are used — to keep module import TE-free.
 from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from omegaconf import OmegaConf
@@ -482,6 +485,11 @@ class MegatronWorker:
         self.enable_router_replay = megatron_config.moe_enable_routing_replay
 
     def configure_lora(self, lora_config, lora_type: Optional[str] = "lora"):
+        # Lazy import: megatron-bridge LoRA layers hard-import transformer_engine (absent on
+        # the no-TE zero-KL stack). Only reached when LoRA/PEFT is actually configured.
+        from megatron.bridge.peft.canonical_lora import CanonicalLoRA
+        from megatron.bridge.peft.lora import LoRA
+
         if lora_type == "lora":
             self.lora_cls = LoRA(
                 target_modules=(
